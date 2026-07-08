@@ -7,11 +7,16 @@ const PORT = Number(process.env.PORT || 8787);
 const PAYSTACK_SECRET_KEY = (process.env.PAYSTACK_SECRET_KEY || "").trim();
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const DATABASE_URL = (process.env.DATABASE_URL || "").trim();
+const MONGODB_URI = (process.env.MONGODB_URI || "").trim();
+const MONGODB_DB = process.env.MONGODB_DB || "ledgerlink";
 const ROOT_DIR = __dirname;
 const DATA_DIR = path.join(ROOT_DIR, "data");
 const DB_PATH = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.join(DATA_DIR, "ledgerlink-db.json");
 const SESSION_COOKIE = "ledgerlink_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
+let pgPool = null;
+let mongoClient = null;
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -81,8 +86,6 @@ const seedInvoices = [
   }
 ];
 
-ensureDatabase();
-
 const server = http.createServer(async (req, res) => {
   try {
     setCors(res);
@@ -101,14 +104,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/session" && req.method === "GET") {
-      const user = getUserFromRequest(req);
-      writeJson(res, 200, user ? sessionPayload(user) : { authenticated: false });
+      const { user, db } = await getUserFromRequest(req);
+      writeJson(res, 200, user ? sessionPayload(user, db) : { authenticated: false });
       return;
     }
 
     if (url.pathname === "/api/auth/register" && req.method === "POST") {
       const body = await readJson(req);
-      const db = readDb();
+      const db = await readDb();
       const email = normalizeEmail(body.email);
       if (!email || !body.password || String(body.password).length < 8) {
         writeJson(res, 400, { error: "Use a valid email and a password with at least 8 characters." });
@@ -136,7 +139,7 @@ const server = http.createServer(async (req, res) => {
 
       const session = createSession(user.id);
       db.sessions.push(session);
-      writeDb(db);
+      await writeDb(db);
       setSessionCookie(res, session.id);
       writeJson(res, 201, sessionPayload(user, db));
       return;
@@ -144,7 +147,7 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/auth/login" && req.method === "POST") {
       const body = await readJson(req);
-      const db = readDb();
+      const db = await readDb();
       const user = db.users.find(item => item.email === normalizeEmail(body.email));
       if (!user || !verifyPassword(String(body.password || ""), user.password)) {
         writeJson(res, 401, { error: "Invalid email or password." });
@@ -152,31 +155,31 @@ const server = http.createServer(async (req, res) => {
       }
       const session = createSession(user.id);
       db.sessions.push(session);
-      writeDb(db);
+      await writeDb(db);
       setSessionCookie(res, session.id);
       writeJson(res, 200, sessionPayload(user, db));
       return;
     }
 
     if (url.pathname === "/api/auth/logout" && req.method === "POST") {
-      const db = readDb();
+      const db = await readDb();
       const sessionId = getCookie(req, SESSION_COOKIE);
       db.sessions = db.sessions.filter(session => session.id !== sessionId);
-      writeDb(db);
+      await writeDb(db);
       clearSessionCookie(res);
       writeJson(res, 200, { ok: true });
       return;
     }
 
     if (url.pathname === "/api/state" && req.method === "GET") {
-      const { user, db } = requireUser(req, res);
+      const { user, db } = await requireUser(req, res);
       if (!user) return;
       writeJson(res, 200, getStateForUser(db, user));
       return;
     }
 
     if (url.pathname === "/api/state" && req.method === "PUT") {
-      const { user, db } = requireUser(req, res);
+      const { user, db } = await requireUser(req, res);
       if (!user) return;
       const body = await readJson(req);
       const business = getBusinessForUser(db, user);
@@ -186,14 +189,14 @@ const server = http.createServer(async (req, res) => {
         ...sanitizeInvoice(invoice),
         businessId: business.id
       })));
-      writeDb(db);
+      await writeDb(db);
       writeJson(res, 200, getStateForUser(db, user));
       return;
     }
 
     const publicInvoice = url.pathname.match(/^\/api\/public\/invoices\/([^/]+)$/);
     if (publicInvoice && req.method === "GET") {
-      const db = readDb();
+      const db = await readDb();
       const invoice = db.invoices.find(item => item.id === decodeURIComponent(publicInvoice[1]));
       if (!invoice) {
         writeJson(res, 404, { error: "Invoice not found." });
@@ -206,7 +209,7 @@ const server = http.createServer(async (req, res) => {
 
     const invoicePatch = url.pathname.match(/^\/api\/invoices\/([^/]+)$/);
     if (invoicePatch && req.method === "PATCH") {
-      const { user, db } = requireUser(req, res);
+      const { user, db } = await requireUser(req, res);
       if (!user) return;
       const business = getBusinessForUser(db, user);
       const invoice = db.invoices.find(item => item.id === decodeURIComponent(invoicePatch[1]) && item.businessId === business.id);
@@ -215,7 +218,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       Object.assign(invoice, sanitizeInvoice({ ...invoice, ...(await readJson(req)) }), { businessId: business.id });
-      writeDb(db);
+      await writeDb(db);
       writeJson(res, 200, invoice);
       return;
     }
@@ -223,7 +226,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/paystack/initialize" && req.method === "POST") {
       requireSecret();
       const body = await readJson(req);
-      const db = readDb();
+      const db = await readDb();
       const invoice = db.invoices.find(item => item.id === body.invoiceId);
       if (!invoice || !["pending", "overdue"].includes(effectiveStatus(invoice))) {
         writeJson(res, 404, { error: "Payable invoice not found." });
@@ -239,6 +242,7 @@ const server = http.createServer(async (req, res) => {
         currency: "NGN",
         reference,
         metadata: {
+          project: "ledgerlink",
           invoiceId: invoice.id,
           businessId: business.id,
           expectedAmount: amount,
@@ -271,7 +275,7 @@ const server = http.createServer(async (req, res) => {
       }
       const data = await verifyPaystack(reference);
       if (data.status && data.data?.status === "success") {
-        const result = markInvoicePaidFromTransaction(data.data);
+        const result = await markInvoicePaidFromTransaction(data.data);
         if (!result.ok) {
           writeJson(res, 422, { error: result.error, paystack: data });
           return;
@@ -291,7 +295,7 @@ const server = http.createServer(async (req, res) => {
       }
       const event = JSON.parse(rawBody);
       if (event.event === "charge.success") {
-        const result = markInvoicePaidFromTransaction(event.data);
+        const result = await markInvoicePaidFromTransaction(event.data);
         if (!result.ok) console.error("Webhook payment rejected:", result.error);
       }
       writeJson(res, 200, { received: true });
@@ -315,28 +319,116 @@ server.on("error", error => {
   throw error;
 });
 
-server.listen(PORT, () => {
-  console.log(`LedgerLink running at http://localhost:${PORT}`);
-  if (!PAYSTACK_SECRET_KEY) console.log("Paystack is in demo mode until PAYSTACK_SECRET_KEY is set.");
-  if (PUBLIC_BASE_URL) console.log(`Public webhook/callback base URL: ${PUBLIC_BASE_URL}`);
-});
+startServer();
 
-function ensureDatabase() {
+async function startServer() {
+  await ensureDatabase();
+  server.listen(PORT, () => {
+    console.log(`LedgerLink running at http://localhost:${PORT}`);
+    console.log(`Storage: ${storageLabel()}`);
+    if (!PAYSTACK_SECRET_KEY) console.log("Paystack is in demo mode until PAYSTACK_SECRET_KEY is set.");
+    if (PUBLIC_BASE_URL) console.log(`Public webhook/callback base URL: ${PUBLIC_BASE_URL}`);
+  });
+}
+
+function storageLabel() {
+  if (DATABASE_URL) return "Postgres";
+  if (MONGODB_URI) return `MongoDB (${MONGODB_DB})`;
+  return `JSON file (${DB_PATH})`;
+}
+
+async function ensureDatabase() {
+  if (DATABASE_URL) {
+    const pool = getPgPool();
+    await pool.query(`
+      create table if not exists ledgerlink_state (
+        id text primary key,
+        data jsonb not null,
+        updated_at timestamptz not null default now()
+      )
+    `);
+    await pool.query(
+      `insert into ledgerlink_state (id, data)
+       values ($1, $2::jsonb)
+       on conflict (id) do nothing`,
+      ["app", JSON.stringify(emptyDb({ settings: seedSettings, invoices: seedInvoices }))]
+    );
+    await writeDb(await readDb());
+    return;
+  }
+
+  if (MONGODB_URI) {
+    const collection = await getMongoCollection();
+    await collection.updateOne(
+      { _id: "app" },
+      { $setOnInsert: { data: emptyDb({ settings: seedSettings, invoices: seedInvoices }), updatedAt: new Date() } },
+      { upsert: true }
+    );
+    await writeDb(await readDb());
+    return;
+  }
+
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   if (!fs.existsSync(DB_PATH)) {
-    writeDb(emptyDb({ settings: seedSettings, invoices: seedInvoices }));
+    await writeDb(emptyDb({ settings: seedSettings, invoices: seedInvoices }));
     return;
   }
-  writeDb(readDb());
+  await writeDb(await readDb());
 }
 
-function readDb() {
+async function readDb() {
+  if (DATABASE_URL) {
+    const result = await getPgPool().query("select data from ledgerlink_state where id = $1", ["app"]);
+    return migrateDb(result.rows[0]?.data || emptyDb());
+  }
+  if (MONGODB_URI) {
+    const document = await (await getMongoCollection()).findOne({ _id: "app" });
+    return migrateDb(document?.data || emptyDb());
+  }
   return migrateDb(JSON.parse(fs.readFileSync(DB_PATH, "utf8")));
 }
 
-function writeDb(data) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(sanitizeDb(data), null, 2));
+async function writeDb(data) {
+  const clean = sanitizeDb(data);
+  if (DATABASE_URL) {
+    await getPgPool().query(
+      `insert into ledgerlink_state (id, data, updated_at)
+       values ($1, $2::jsonb, now())
+       on conflict (id) do update set data = excluded.data, updated_at = now()`,
+      ["app", JSON.stringify(clean)]
+    );
+    return;
+  }
+  if (MONGODB_URI) {
+    await (await getMongoCollection()).updateOne(
+      { _id: "app" },
+      { $set: { data: clean, updatedAt: new Date() } },
+      { upsert: true }
+    );
+    return;
+  }
+  fs.writeFileSync(DB_PATH, JSON.stringify(clean, null, 2));
+}
+
+function getPgPool() {
+  if (!pgPool) {
+    const { Pool } = require("pg");
+    pgPool = new Pool({
+      connectionString: DATABASE_URL,
+      ssl: IS_PRODUCTION ? { rejectUnauthorized: false } : undefined
+    });
+  }
+  return pgPool;
+}
+
+async function getMongoCollection() {
+  if (!mongoClient) {
+    const { MongoClient } = require("mongodb");
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+  }
+  return mongoClient.db(MONGODB_DB).collection("app_state");
 }
 
 function emptyDb(orphanState = null) {
@@ -406,7 +498,7 @@ function createSession(userId) {
   };
 }
 
-function sessionPayload(user, db = readDb()) {
+function sessionPayload(user, db) {
   return {
     authenticated: true,
     user: { id: user.id, name: user.name, email: user.email },
@@ -414,15 +506,15 @@ function sessionPayload(user, db = readDb()) {
   };
 }
 
-function getUserFromRequest(req) {
-  const db = readDb();
+async function getUserFromRequest(req) {
+  const db = await readDb();
   const sessionId = getCookie(req, SESSION_COOKIE);
   const session = db.sessions.find(item => item.id === sessionId && new Date(item.expiresAt) > new Date());
-  return session ? db.users.find(user => user.id === session.userId) : null;
+  return { user: session ? db.users.find(user => user.id === session.userId) : null, db };
 }
 
-function requireUser(req, res) {
-  const db = readDb();
+async function requireUser(req, res) {
+  const db = await readDb();
   const sessionId = getCookie(req, SESSION_COOKIE);
   const session = db.sessions.find(item => item.id === sessionId && new Date(item.expiresAt) > new Date());
   const user = session ? db.users.find(item => item.id === session.userId) : null;
@@ -515,9 +607,9 @@ async function verifyPaystack(reference) {
   return paystackResponse.json();
 }
 
-function markInvoicePaidFromTransaction(transaction) {
+async function markInvoicePaidFromTransaction(transaction) {
   const invoiceId = transaction?.metadata?.invoiceId;
-  const db = readDb();
+  const db = await readDb();
   const invoice = db.invoices.find(item => item.id === invoiceId);
   if (!invoice) return { ok: false, error: "Invoice not found for transaction." };
   const business = db.businesses.find(item => item.id === invoice.businessId);
@@ -531,7 +623,7 @@ function markInvoicePaidFromTransaction(transaction) {
   invoice.status = "paid";
   invoice.paidAt = String(transaction.paid_at || new Date().toISOString()).slice(0, 10);
   invoice.paystackReference = transaction.reference;
-  writeDb(db);
+  await writeDb(db);
   return { ok: true };
 }
 

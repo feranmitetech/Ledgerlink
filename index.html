@@ -1,0 +1,2112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LedgerLink - Invoice & Payment Tracker</title>
+  <script src="https://js.paystack.co/v2/inline.js" defer></script>
+  <style>
+    :root {
+      --ink: #17201c;
+      --muted: #65736d;
+      --line: #dce5df;
+      --soft: #f6f8f5;
+      --paper: #ffffff;
+      --green: #107c55;
+      --green-dark: #0d5f43;
+      --indigo: #2f4f9e;
+      --amber: #b66a05;
+      --red: #b42318;
+      --teal-soft: #dff5ed;
+      --amber-soft: #fff1cf;
+      --red-soft: #ffe4df;
+      --shadow: 0 16px 48px rgba(24, 39, 32, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--soft);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #10211a;
+      color: #f7fff9;
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+      min-height: 100vh;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #1db777;
+      color: #072116;
+      box-shadow: inset 0 -7px 18px rgba(7, 33, 22, 0.18);
+      flex: 0 0 auto;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 19px;
+      line-height: 1;
+    }
+
+    .brand span {
+      display: block;
+      color: #a7c8ba;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      min-height: 42px;
+      border: 0;
+      border-radius: 8px;
+      color: #d8ebe1;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 11px;
+      text-align: left;
+    }
+
+    .nav button.active,
+    .nav button:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+    }
+
+    .nav svg,
+    .icon {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+    }
+
+    main {
+      min-width: 0;
+      padding: 24px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    .title-block h2 {
+      margin: 0 0 5px;
+      font-size: 25px;
+      line-height: 1.15;
+    }
+
+    .title-block p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      min-height: 38px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 13px;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      border-color: var(--green);
+      background: var(--green);
+      color: #fff;
+    }
+
+    .btn.primary:hover {
+      background: var(--green-dark);
+    }
+
+    .btn.ghost {
+      background: transparent;
+    }
+
+    .btn.icon-only {
+      width: 38px;
+      padding: 0;
+    }
+
+    .btn.small {
+      min-height: 32px;
+      padding: 0 10px;
+      font-size: 13px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .metrics {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .metric {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 17px;
+      min-height: 112px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 26px;
+      line-height: 1.1;
+    }
+
+    .metric small {
+      color: var(--muted);
+      margin-top: 9px;
+    }
+
+    .auth-page {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+      background: #10211a;
+      color: #fff;
+    }
+
+    .auth-brand {
+      padding: 42px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 28px;
+    }
+
+    .auth-brand h1 {
+      margin: 18px 0 12px;
+      font-size: 42px;
+      line-height: 1.05;
+    }
+
+    .auth-brand p {
+      color: #c5dcd2;
+      max-width: 520px;
+      line-height: 1.55;
+    }
+
+    .auth-form-wrap {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: var(--soft);
+      color: var(--ink);
+    }
+
+    .auth-card {
+      width: min(460px, 100%);
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+
+    .auth-card h2 {
+      margin: 0 0 6px;
+      font-size: 23px;
+    }
+
+    .auth-card p {
+      margin: 0 0 16px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .auth-card form {
+      display: grid;
+      gap: 13px;
+    }
+
+    .auth-switch {
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .work-grid {
+      grid-template-columns: minmax(0, 1.65fr) minmax(320px, 0.9fr);
+      align-items: start;
+      margin-top: 16px;
+    }
+
+    .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-header h3 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .panel-header p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .panel-body {
+      padding: 16px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 13px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+      font-size: 14px;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      border-radius: 999px;
+      padding: 0 10px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status.paid {
+      background: var(--teal-soft);
+      color: var(--green-dark);
+    }
+
+    .status.pending {
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .status.overdue {
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .status.draft {
+      background: #e9eef7;
+      color: var(--indigo);
+    }
+
+    .customer-cell strong {
+      display: block;
+    }
+
+    .customer-cell span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .invoice-actions {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      justify-content: flex-end;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 13px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    input,
+    input::file-selector-button,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      min-height: 40px;
+      padding: 9px 10px;
+      outline: none;
+    }
+
+    input[type="color"] {
+      padding: 4px;
+      min-height: 44px;
+    }
+
+    input[type="file"] {
+      padding: 7px;
+    }
+
+    input::file-selector-button {
+      width: auto;
+      min-height: 28px;
+      margin-right: 10px;
+      border: 0;
+      background: var(--soft);
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    textarea {
+      min-height: 84px;
+      resize: vertical;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--green);
+      box-shadow: 0 0 0 3px rgba(16, 124, 85, 0.14);
+    }
+
+    .full {
+      grid-column: 1 / -1;
+    }
+
+    .line-items {
+      display: grid;
+      gap: 10px;
+      margin-top: 4px;
+    }
+
+    .item-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) 74px 110px 38px;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .totals {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border-radius: 8px;
+      background: var(--soft);
+      margin-top: 12px;
+      font-size: 14px;
+    }
+
+    .totals div {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .totals strong {
+      font-size: 18px;
+    }
+
+    .brand-settings {
+      display: grid;
+      grid-template-columns: 128px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      background: var(--soft);
+    }
+
+    .logo-preview {
+      width: 112px;
+      height: 112px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      padding: 10px;
+    }
+
+    .logo-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .swatches {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 13px;
+    }
+
+    .empty {
+      padding: 28px 16px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    .reminder-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .reminder {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .reminder-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .reminder strong {
+      display: block;
+    }
+
+    .reminder span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .reminder-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tabs {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--paper);
+    }
+
+    .tabs button {
+      border: 0;
+      min-height: 34px;
+      padding: 0 12px;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .tabs button.active {
+      background: var(--green);
+      color: #fff;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      background: #10211a;
+      color: #fff;
+      border-radius: 8px;
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+      transform: translateY(24px);
+      opacity: 0;
+      pointer-events: none;
+      transition: 180ms ease;
+      z-index: 20;
+      max-width: min(380px, calc(100vw - 36px));
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 20, 16, 0.54);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      z-index: 10;
+    }
+
+    .modal.open {
+      display: flex;
+    }
+
+    .modal-card {
+      width: min(880px, 100%);
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      background: var(--paper);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .invoice-paper {
+      width: min(880px, 100%);
+      margin: 0 auto;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      --invoice-brand: var(--green);
+      --invoice-accent: var(--indigo);
+      --invoice-on-brand: #ffffff;
+    }
+
+    .public-page {
+      min-height: 100vh;
+      padding: 24px;
+      display: grid;
+      place-items: start center;
+      background: var(--soft);
+    }
+
+    .invoice-head {
+      padding: 22px;
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--invoice-brand);
+      color: var(--invoice-on-brand);
+    }
+
+    .invoice-head h1 {
+      margin: 0 0 7px;
+      font-size: 25px;
+    }
+
+    .invoice-head p,
+    .invoice-meta p {
+      margin: 0;
+      color: color-mix(in srgb, var(--invoice-on-brand) 82%, transparent);
+      line-height: 1.5;
+    }
+
+    .invoice-brand-block {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    .invoice-logo {
+      width: 62px;
+      height: 62px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.95);
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      flex: 0 0 auto;
+      color: var(--invoice-brand);
+      font-weight: 800;
+    }
+
+    .invoice-logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      padding: 6px;
+    }
+
+    .invoice-meta {
+      text-align: right;
+      min-width: 180px;
+    }
+
+    .invoice-meta h1 {
+      color: var(--invoice-on-brand);
+    }
+
+    .invoice-content {
+      padding: 22px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .bill-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .bill-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+    }
+
+    .bill-box span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .bill-box p {
+      margin: 7px 0 0;
+      line-height: 1.5;
+    }
+
+    .pay-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-top: 1px solid var(--line);
+      background: color-mix(in srgb, var(--invoice-brand) 9%, #ffffff);
+      padding: 16px 22px;
+      flex-wrap: wrap;
+    }
+
+    .pay-strip strong {
+      font-size: 22px;
+    }
+
+    .invoice-paper .btn.primary {
+      border-color: var(--invoice-brand);
+      background: var(--invoice-brand);
+      color: var(--invoice-on-brand);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 980px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        min-height: auto;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+      }
+
+      .nav {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .metrics,
+      .work-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 680px) {
+      main,
+      .public-page {
+        padding: 14px;
+      }
+
+      .topbar,
+      .invoice-head,
+      .pay-strip,
+      .bill-grid,
+      .auth-page {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+
+      .auth-brand,
+      .auth-form-wrap {
+        min-height: auto;
+        padding: 22px;
+      }
+
+      .actions {
+        justify-content: stretch;
+      }
+
+      .actions .btn {
+        flex: 1 1 auto;
+      }
+
+      .nav {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .form-grid,
+      .item-row {
+        grid-template-columns: 1fr;
+      }
+
+      .item-row .icon-only {
+        width: 100%;
+      }
+
+      .invoice-meta {
+        text-align: left;
+      }
+    }
+
+    @media print {
+      body {
+        background: #fff;
+      }
+
+      .sidebar,
+      .topbar,
+      .pay-strip,
+      .modal .panel-header,
+      .no-print {
+        display: none !important;
+      }
+
+      .app-shell {
+        display: block;
+      }
+
+      main,
+      .public-page {
+        padding: 0;
+      }
+
+      .invoice-paper {
+        border: 0;
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <div class="toast" id="toast"></div>
+
+  <template id="icon-template">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d=""></path>
+    </svg>
+  </template>
+
+  <script>
+    const STORAGE_KEY = "ledgerlink.ng.v1";
+    const root = document.querySelector("#root");
+    const toastEl = document.querySelector("#toast");
+    const today = new Date();
+    const canUseBackend = location.protocol === "http:" || location.protocol === "https:";
+    let activeView = "dashboard";
+    let statusFilter = "all";
+    let backendReady = false;
+    let authChecked = !canUseBackend;
+    let backendError = "";
+    let currentUser = null;
+    let authMode = "login";
+    let publicInvoiceCache = {};
+    let verifiedReference = "";
+    let saveTimer = null;
+
+    const icons = {
+      dashboard: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>',
+      invoice: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h10l3 3v15l-2-1-2 1-2-1-2 1-2-1-2 1-2-1-2 1V5a2 2 0 0 1 2-2z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>',
+      bell: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>',
+      cog: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.8 1.8 0 0 0-2-.4 1.8 1.8 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.2a1.8 1.8 0 0 0-1-1.6 1.8 1.8 0 0 0-2 .4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.8 1.8 0 0 0 .4-2 1.8 1.8 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.8 1.8 0 0 0 1.6-1 1.8 1.8 0 0 0-.4-2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.8 1.8 0 0 0 2 .4 1.8 1.8 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.8 1.8 0 0 0 1 1.6 1.8 1.8 0 0 0 2-.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.8 1.8 0 0 0-.4 2 1.8 1.8 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.2a1.8 1.8 0 0 0-1.4 1z"/></svg>',
+      plus: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>',
+      copy: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+      send: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4 20-7z"/><path d="M22 2 11 13"/></svg>',
+      pay: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></svg>',
+      trash: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 16h10l1-16"/></svg>',
+      print: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>',
+      download: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>'
+    };
+
+    const seedState = {
+      settings: {
+        businessName: "Aduke Foods & Catering",
+        ownerEmail: "hello@adukefoods.ng",
+        phone: "+234 801 234 5678",
+        address: "18 Allen Avenue, Ikeja, Lagos",
+        bank: "GTBank - 0123456789",
+        brandColor: "#107c55",
+        accentColor: "#2f4f9e",
+        logoDataUrl: "",
+        reminderBeforeDays: 2,
+        reminderAfterDays: 1,
+        vatRate: 7.5
+      },
+      invoices: [
+        {
+          id: "INV-1007",
+          customer: "Nora Martins",
+          email: "nora@example.com",
+          phone: "+234 806 110 2304",
+          issueDate: dateOffset(-9),
+          dueDate: dateOffset(-2),
+          status: "overdue",
+          notes: "Thank you for trusting us with your staff lunch service.",
+          items: [
+            { description: "Corporate lunch packs", quantity: 45, price: 3800 },
+            { description: "Delivery to Victoria Island", quantity: 1, price: 18000 }
+          ],
+          reminders: [{ date: dateOffset(-1), channel: "Email" }]
+        },
+        {
+          id: "INV-1008",
+          customer: "Tola Design Studio",
+          email: "accounts@toladesign.test",
+          phone: "+234 803 222 4199",
+          issueDate: dateOffset(-3),
+          dueDate: dateOffset(4),
+          status: "pending",
+          notes: "Payment validates the final brand assets handover.",
+          items: [
+            { description: "Brand strategy workshop", quantity: 1, price: 220000 },
+            { description: "Identity design balance", quantity: 1, price: 430000 }
+          ],
+          reminders: []
+        },
+        {
+          id: "INV-1009",
+          customer: "Musa Auto Parts",
+          email: "musa@example.com",
+          phone: "+234 809 908 7781",
+          issueDate: dateOffset(-15),
+          dueDate: dateOffset(-8),
+          status: "paid",
+          notes: "Paid by bank transfer.",
+          paidAt: dateOffset(-7),
+          items: [
+            { description: "Website maintenance", quantity: 1, price: 150000 }
+          ],
+          reminders: []
+        }
+      ]
+    };
+
+    let state = loadState();
+
+    function dateOffset(days) {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      return d.toISOString().slice(0, 10);
+    }
+
+    function loadState() {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (!saved) return structuredClone(seedState);
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return structuredClone(seedState);
+      }
+    }
+
+    function saveState() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      queueBackendSave();
+    }
+
+    async function hydrateFromBackend() {
+      if (!canUseBackend) return;
+      try {
+        const response = await fetch("/api/session");
+        if (!response.ok) {
+          if (response.status === 404) {
+            throw new Error("The server on this port is an older backend. Restart with the latest server.js that includes /api/session.");
+          }
+          throw new Error(`Session check failed with HTTP ${response.status}.`);
+        }
+        const payload = await response.json();
+        backendReady = true;
+        backendError = "";
+        authChecked = true;
+        currentUser = payload.authenticated ? payload.user : null;
+        if (payload.state) {
+          state = payload.state;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        }
+        render();
+      } catch (error) {
+        backendReady = false;
+        backendError = error.message || "Could not reach the backend.";
+        authChecked = true;
+        render();
+      }
+    }
+
+    function queueBackendSave() {
+      if (!backendReady || (canUseBackend && !currentUser)) return;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        fetch("/api/state", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(state)
+        }).catch(() => {
+          backendReady = false;
+          showToast("Backend sync paused. Changes are saved in this browser.");
+        });
+      }, 200);
+    }
+
+    function formatMoney(value) {
+      return new Intl.NumberFormat("en-NG", {
+        style: "currency",
+        currency: "NGN",
+        maximumFractionDigits: 0
+      }).format(Number(value || 0));
+    }
+
+    function formatDate(value) {
+      return new Intl.DateTimeFormat("en-NG", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
+    }
+
+    function invoiceSubtotal(invoice) {
+      return invoice.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.price || 0), 0);
+    }
+
+    function invoiceVat(invoice) {
+      return invoiceSubtotal(invoice) * (Number(state.settings.vatRate || 0) / 100);
+    }
+
+    function invoiceTotal(invoice) {
+      return invoiceSubtotal(invoice) + invoiceVat(invoice);
+    }
+
+    function invoiceVatWithSettings(invoice, settings) {
+      return invoiceSubtotal(invoice) * (Number(settings.vatRate || 0) / 100);
+    }
+
+    function invoiceTotalWithSettings(invoice, settings) {
+      return invoiceSubtotal(invoice) + invoiceVatWithSettings(invoice, settings);
+    }
+
+    function effectiveStatus(invoice) {
+      if (invoice.status === "paid" || invoice.status === "draft") return invoice.status;
+      return new Date(invoice.dueDate + "T23:59:59") < today ? "overdue" : "pending";
+    }
+
+    function daysBetween(dateValue) {
+      const target = new Date(dateValue + "T00:00:00");
+      const start = new Date(today.toISOString().slice(0, 10) + "T00:00:00");
+      return Math.round((target - start) / 86400000);
+    }
+
+    function showToast(message) {
+      toastEl.textContent = message;
+      toastEl.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toastEl.classList.remove("show"), 2600);
+    }
+
+    function shareUrl(invoice) {
+      return `${location.origin}${location.pathname}#pay/${invoice.id}`;
+    }
+
+    function reminderMessage(invoice) {
+      const total = formatMoney(invoiceTotal(invoice));
+      const status = effectiveStatus(invoice);
+      if (status === "overdue") {
+        return `Hello ${invoice.customer}, this is a friendly reminder that invoice ${invoice.id} for ${total} was due on ${formatDate(invoice.dueDate)}. You can pay here: ${shareUrl(invoice)}`;
+      }
+      return `Hello ${invoice.customer}, invoice ${invoice.id} for ${total} is due on ${formatDate(invoice.dueDate)}. You can review and pay here: ${shareUrl(invoice)}`;
+    }
+
+    function getReminderQueue() {
+      const before = Number(state.settings.reminderBeforeDays || 0);
+      const after = Number(state.settings.reminderAfterDays || 0);
+      return state.invoices
+        .filter(invoice => effectiveStatus(invoice) !== "paid" && effectiveStatus(invoice) !== "draft")
+        .map(invoice => {
+          const dueIn = daysBetween(invoice.dueDate);
+          const shouldSend = dueIn <= before || dueIn <= -after;
+          return { invoice, dueIn, shouldSend };
+        })
+        .filter(row => row.shouldSend)
+        .sort((a, b) => a.dueIn - b.dueIn);
+    }
+
+    function render() {
+      const payMatch = location.hash.match(/^#pay\/(.+)$/);
+      if (payMatch) {
+        renderPublicInvoice(payMatch[1]);
+        return;
+      }
+
+      if (canUseBackend && !authChecked) {
+        root.innerHTML = `<div class="public-page"><div class="invoice-paper"><div class="empty">Loading your workspace...</div></div></div>`;
+        return;
+      }
+
+      if (canUseBackend && !backendReady) {
+        renderBackendError();
+        return;
+      }
+
+      if (backendReady && !currentUser) {
+        renderAuth();
+        return;
+      }
+
+      root.innerHTML = `
+        <div class="app-shell">
+          <aside class="sidebar">
+            <div class="brand">
+              <div class="brand-mark">${icons.invoice}</div>
+              <div>
+                <h1>LedgerLink</h1>
+                <span>Invoices for Nigerian SMEs</span>
+              </div>
+            </div>
+            <nav class="nav">
+              ${navButton("dashboard", "Dashboard", icons.dashboard)}
+              ${navButton("invoices", "Invoices", icons.invoice)}
+              ${navButton("reminders", "Reminders", icons.bell)}
+              ${navButton("settings", "Settings", icons.cog)}
+              <button id="logoutButton">${icons.cog}<span>Sign out</span></button>
+            </nav>
+          </aside>
+          <main>
+            ${viewHtml()}
+          </main>
+        </div>
+      `;
+      bindCommonEvents();
+      bindViewEvents();
+    }
+
+    function renderBackendError() {
+      root.innerHTML = `
+        <div class="auth-page">
+          <section class="auth-brand">
+            <div class="brand">
+              <div class="brand-mark">${icons.invoice}</div>
+              <div>
+                <h1>LedgerLink</h1>
+                <span>Invoices for Nigerian SMEs</span>
+              </div>
+            </div>
+            <div>
+              <h1>Backend connection needed.</h1>
+              <p>The dashboard now requires login and invoice ownership checks, so it needs the local server running.</p>
+            </div>
+          </section>
+          <section class="auth-form-wrap">
+            <div class="auth-card">
+              <h2>Could not load session</h2>
+              <p>${escapeHtml(backendError || "Open PowerShell, start node server.js, then try again.")}</p>
+              <button class="btn primary" id="retryBackend">Retry</button>
+            </div>
+          </section>
+        </div>
+      `;
+      document.querySelector("#retryBackend").addEventListener("click", () => {
+        authChecked = false;
+        render();
+        hydrateFromBackend();
+      });
+    }
+
+    function renderAuth() {
+      const isRegister = authMode === "register";
+      root.innerHTML = `
+        <div class="auth-page">
+          <section class="auth-brand">
+            <div class="brand">
+              <div class="brand-mark">${icons.invoice}</div>
+              <div>
+                <h1>LedgerLink</h1>
+                <span>Invoices for Nigerian SMEs</span>
+              </div>
+            </div>
+            <div>
+              <h1>Own your invoices, payments, and customer reminders.</h1>
+              <p>Each business account now has separate invoice data, branded settings, and protected payment records.</p>
+            </div>
+            <p>Built by Feranmite Technology · Lagos, Nigeria</p>
+          </section>
+          <section class="auth-form-wrap">
+            <div class="auth-card">
+              <h2>${isRegister ? "Create your account" : "Sign in"}</h2>
+              <p>${isRegister ? "Your first account claims the current local invoices and settings." : "Continue to your private business workspace."}</p>
+              <form id="authForm">
+                ${isRegister ? `
+                  <label>Your name<input name="name" autocomplete="name" required></label>
+                  <label>Business name<input name="businessName" autocomplete="organization" required></label>
+                ` : ""}
+                <label>Email<input name="email" type="email" autocomplete="email" required></label>
+                <label>Password<input name="password" type="password" autocomplete="${isRegister ? "new-password" : "current-password"}" minlength="8" required></label>
+                <button class="btn primary" type="submit">${isRegister ? "Create account" : "Sign in"}</button>
+              </form>
+              <div class="auth-switch">
+                <span>${isRegister ? "Already have an account?" : "New here?"}</span>
+                <button class="btn small" id="authSwitch">${isRegister ? "Sign in" : "Create account"}</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      `;
+      document.querySelector("#authForm").addEventListener("submit", submitAuth);
+      document.querySelector("#authSwitch").addEventListener("click", () => {
+        authMode = isRegister ? "login" : "register";
+        renderAuth();
+      });
+    }
+
+    async function submitAuth(event) {
+      event.preventDefault();
+      const form = Object.fromEntries(new FormData(event.currentTarget).entries());
+      const endpoint = authMode === "register" ? "/api/auth/register" : "/api/auth/login";
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(form)
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Authentication failed.");
+        currentUser = payload.user;
+        state = payload.state;
+        backendReady = true;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        showToast(authMode === "register" ? "Account created." : "Signed in.");
+        render();
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function logout() {
+      await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+      currentUser = null;
+      render();
+    }
+
+    function navButton(view, label, icon) {
+      return `<button class="${activeView === view ? "active" : ""}" data-view="${view}">${icon}<span>${label}</span></button>`;
+    }
+
+    function viewHtml() {
+      if (activeView === "invoices") return invoicesView();
+      if (activeView === "reminders") return remindersView();
+      if (activeView === "settings") return settingsView();
+      return dashboardView();
+    }
+
+    function dashboardView() {
+      const metrics = getMetrics();
+      const recent = [...state.invoices].sort((a, b) => b.id.localeCompare(a.id)).slice(0, 5);
+      return `
+        <section class="topbar">
+          <div class="title-block">
+            <h2>Receivables command center</h2>
+            <p>Create invoices, chase late payments, and give customers a direct payment route.</p>
+          </div>
+          <div class="actions">
+            <button class="btn" id="exportCsv">${icons.download}Export CSV</button>
+            <button class="btn primary" id="newInvoice">${icons.plus}New invoice</button>
+          </div>
+        </section>
+        <section class="grid metrics">
+          ${metricCard("Outstanding", formatMoney(metrics.outstanding), `${metrics.pendingCount} unpaid invoices`)}
+          ${metricCard("Overdue", formatMoney(metrics.overdue), `${metrics.overdueCount} need attention`)}
+          ${metricCard("Paid this month", formatMoney(metrics.paidMonth), `${metrics.paidCount} paid invoices`)}
+          ${metricCard("Reminder queue", String(getReminderQueue().length), "Ready to send today")}
+        </section>
+        <section class="grid work-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Recent invoices</h3>
+                <p>Tap an invoice to preview or send it.</p>
+              </div>
+              <button class="btn small" data-view="invoices">View all</button>
+            </div>
+            ${invoiceTable(recent)}
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Payment reminders</h3>
+                <p>Generated from due dates and your reminder rules.</p>
+              </div>
+            </div>
+            <div class="panel-body">${reminderList(getReminderQueue().slice(0, 4))}</div>
+          </div>
+        </section>
+        ${invoiceModal()}
+      `;
+    }
+
+    function metricCard(label, value, note) {
+      return `
+        <article class="metric">
+          <span>${label}</span>
+          <strong>${value}</strong>
+          <small>${note}</small>
+        </article>
+      `;
+    }
+
+    function getMetrics() {
+      const month = today.toISOString().slice(0, 7);
+      return state.invoices.reduce((acc, invoice) => {
+        const status = effectiveStatus(invoice);
+        const total = invoiceTotal(invoice);
+        if (status !== "paid" && status !== "draft") {
+          acc.outstanding += total;
+          acc.pendingCount += 1;
+        }
+        if (status === "overdue") {
+          acc.overdue += total;
+          acc.overdueCount += 1;
+        }
+        if (status === "paid") {
+          acc.paidCount += 1;
+          if ((invoice.paidAt || "").slice(0, 7) === month) acc.paidMonth += total;
+        }
+        return acc;
+      }, { outstanding: 0, overdue: 0, paidMonth: 0, pendingCount: 0, overdueCount: 0, paidCount: 0 });
+    }
+
+    function invoicesView() {
+      const filtered = state.invoices.filter(invoice => statusFilter === "all" || effectiveStatus(invoice) === statusFilter);
+      return `
+        <section class="topbar">
+          <div class="title-block">
+            <h2>Invoices</h2>
+            <p>${filtered.length} invoice${filtered.length === 1 ? "" : "s"} in the current view.</p>
+          </div>
+          <div class="actions">
+            <div class="tabs" role="tablist">
+              ${filterButton("all", "All")}
+              ${filterButton("pending", "Pending")}
+              ${filterButton("overdue", "Overdue")}
+              ${filterButton("paid", "Paid")}
+            </div>
+            <button class="btn primary" id="newInvoice">${icons.plus}New invoice</button>
+          </div>
+        </section>
+        <section class="panel">${invoiceTable(filtered)}</section>
+        ${invoiceModal()}
+      `;
+    }
+
+    function filterButton(value, label) {
+      return `<button class="${statusFilter === value ? "active" : ""}" data-filter="${value}">${label}</button>`;
+    }
+
+    function invoiceTable(invoices) {
+      if (!invoices.length) return `<div class="empty">No invoices in this view yet.</div>`;
+      return `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Invoice</th>
+                <th>Customer</th>
+                <th>Due</th>
+                <th>Status</th>
+                <th>Amount</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${invoices.map(invoice => `
+                <tr>
+                  <td><strong>${invoice.id}</strong></td>
+                  <td class="customer-cell"><strong>${invoice.customer}</strong><span>${invoice.email}</span></td>
+                  <td>${formatDate(invoice.dueDate)}</td>
+                  <td><span class="status ${effectiveStatus(invoice)}">${statusLabel(effectiveStatus(invoice))}</span></td>
+                  <td><strong>${formatMoney(invoiceTotal(invoice))}</strong></td>
+                  <td>
+                    <div class="invoice-actions">
+                      <button class="btn icon-only small" title="Preview invoice" data-preview="${invoice.id}">${icons.invoice}</button>
+                      <button class="btn icon-only small" title="Copy payment link" data-copy="${invoice.id}">${icons.copy}</button>
+                      <button class="btn icon-only small" title="Mark as paid" data-paid="${invoice.id}">${icons.pay}</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function statusLabel(status) {
+      return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    function remindersView() {
+      return `
+        <section class="topbar">
+          <div class="title-block">
+            <h2>Reminder queue</h2>
+            <p>Auto-generated from your due dates. Send one reminder, or email all due customers in BCC.</p>
+          </div>
+          <div class="actions">
+            <button class="btn" id="copyAllReminders">${icons.copy}Copy all</button>
+            <button class="btn primary" id="sendBatchEmail">${icons.send}Email all due</button>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-body">${reminderList(getReminderQueue())}</div>
+        </section>
+      `;
+    }
+
+    function reminderList(queue) {
+      if (!queue.length) return `<div class="empty">No reminders due today.</div>`;
+      return `<div class="reminder-list">
+        ${queue.map(({ invoice, dueIn }) => `
+          <article class="reminder">
+            <div class="reminder-top">
+              <div>
+                <strong>${invoice.customer} - ${invoice.id}</strong>
+                <span>${dueIn < 0 ? `${Math.abs(dueIn)} day${Math.abs(dueIn) === 1 ? "" : "s"} overdue` : `Due in ${dueIn} day${dueIn === 1 ? "" : "s"}`} · ${formatMoney(invoiceTotal(invoice))}</span>
+              </div>
+              <span class="status ${effectiveStatus(invoice)}">${statusLabel(effectiveStatus(invoice))}</span>
+            </div>
+            <div class="reminder-actions">
+              <button class="btn small" data-email="${invoice.id}">${icons.send}Email</button>
+              <button class="btn small" data-whatsapp="${invoice.id}">${icons.send}WhatsApp</button>
+              <button class="btn small" data-copy-reminder="${invoice.id}">${icons.copy}Copy</button>
+            </div>
+          </article>
+        `).join("")}
+      </div>`;
+    }
+
+    function settingsView() {
+      const s = state.settings;
+      return `
+        <section class="topbar">
+          <div class="title-block">
+            <h2>Settings</h2>
+            <p>Configure your business profile, invoice branding, VAT, and reminder rules.</p>
+          </div>
+        </section>
+        <section class="panel">
+          <form class="panel-body form-grid" id="settingsForm">
+            <label>Business name<input name="businessName" value="${escapeAttr(s.businessName)}"></label>
+            <label>Owner email<input type="email" name="ownerEmail" value="${escapeAttr(s.ownerEmail)}"></label>
+            <label>Phone<input name="phone" value="${escapeAttr(s.phone)}"></label>
+            <label>VAT rate (%)<input type="number" step="0.1" min="0" name="vatRate" value="${escapeAttr(s.vatRate)}"></label>
+            <label class="full">Address<textarea name="address">${escapeHtml(s.address)}</textarea></label>
+            <label class="full">Bank transfer details<textarea name="bank">${escapeHtml(s.bank)}</textarea></label>
+            <div class="full brand-settings">
+              <div class="logo-preview" id="logoPreview">
+                ${s.logoDataUrl ? `<img src="${escapeAttr(s.logoDataUrl)}" alt="Business logo">` : "No logo uploaded"}
+              </div>
+              <div class="form-grid">
+                <label class="full">Brand logo<input type="file" id="logoUpload" accept="image/png,image/jpeg,image/webp,image/svg+xml"></label>
+                <div class="swatches full">
+                  <label>Brand color<input type="color" name="brandColor" value="${escapeAttr(s.brandColor || "#107c55")}"></label>
+                  <label>Accent color<input type="color" name="accentColor" value="${escapeAttr(s.accentColor || "#2f4f9e")}"></label>
+                </div>
+                <div class="full actions">
+                  <button class="btn small" type="button" id="removeLogo">Remove logo</button>
+                </div>
+              </div>
+            </div>
+            <label>Reminder before due date (days)<input type="number" min="0" name="reminderBeforeDays" value="${escapeAttr(s.reminderBeforeDays)}"></label>
+            <label>Reminder after due date (days)<input type="number" min="0" name="reminderAfterDays" value="${escapeAttr(s.reminderAfterDays)}"></label>
+            <div class="full actions">
+              <button class="btn primary" type="submit">Save settings</button>
+            </div>
+          </form>
+        </section>
+      `;
+    }
+
+    function invoiceModal() {
+      return `
+        <div class="modal" id="invoiceModal">
+          <div class="modal-card">
+            <div class="panel-header">
+              <div>
+                <h3>Create invoice</h3>
+                <p>Add customer details, line items, and a due date.</p>
+              </div>
+              <button class="btn icon-only" id="closeInvoiceModal" title="Close">${icons.trash.replace("<path d=\"M3 6h18M8 6V4h8v2M6 6l1 16h10l1-16\"/>", "<path d=\"M18 6 6 18M6 6l12 12\"/>")}</button>
+            </div>
+            <form class="panel-body form-grid" id="invoiceForm">
+              <label>Customer name<input name="customer" required placeholder="e.g. Chika Stores"></label>
+              <label>Email<input name="email" type="email" required placeholder="accounts@example.com"></label>
+              <label>Phone<input name="phone" placeholder="+234..."></label>
+              <label>Due date<input name="dueDate" type="date" required value="${dateOffset(7)}"></label>
+              <label>Status<select name="status"><option value="pending">Pending</option><option value="draft">Draft</option><option value="paid">Paid</option></select></label>
+              <label>Issue date<input name="issueDate" type="date" required value="${dateOffset(0)}"></label>
+              <div class="full">
+                <label>Line items</label>
+                <div class="line-items" id="lineItems"></div>
+                <button class="btn small" type="button" id="addLine">${icons.plus}Add item</button>
+                <div class="totals" id="invoiceTotals"></div>
+              </div>
+              <label class="full">Notes<textarea name="notes" placeholder="Payment terms, delivery notes, or handover details."></textarea></label>
+              <div class="full actions">
+                <button class="btn" type="button" id="saveDraft">Save draft</button>
+                <button class="btn primary" type="submit">${icons.invoice}Create and copy link</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderPublicInvoice(id) {
+      const cached = publicInvoiceCache[id];
+      const invoice = cached?.invoice || state.invoices.find(item => item.id === id);
+      const invoiceSettings = cached?.settings || state.settings;
+      if (!invoice) {
+        root.innerHTML = `<div class="public-page"><div class="invoice-paper"><div class="empty">Loading invoice...</div></div></div>`;
+        fetchPublicInvoice(id);
+        return;
+      }
+      root.innerHTML = `
+        <div class="public-page">
+          <section class="invoice-paper" style="${invoiceStyleVars(invoiceSettings)}">
+            ${invoiceHtml(invoice, invoiceSettings)}
+            <div class="pay-strip">
+              <div>
+                <span class="status ${effectiveStatus(invoice)}">${statusLabel(effectiveStatus(invoice))}</span>
+                <strong>${formatMoney(invoiceTotalWithSettings(invoice, invoiceSettings))}</strong>
+              </div>
+              <div class="actions">
+                <button class="btn" onclick="window.print()">${icons.print}Print</button>
+                ${effectiveStatus(invoice) === "paid" ? "" : `<button class="btn primary" id="payInvoice">${icons.pay}Pay with Paystack</button>`}
+                <button class="btn" id="backToApp">Back to app</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      `;
+      document.querySelector("#backToApp")?.addEventListener("click", () => {
+        location.hash = "";
+      });
+      document.querySelector("#payInvoice")?.addEventListener("click", () => payInvoice(invoice.id));
+      verifyReturnedPayment(id);
+    }
+
+    async function verifyReturnedPayment(invoiceId) {
+      const reference = paymentReferenceFromUrl();
+      if (!reference || reference === verifiedReference || !canUseBackend) return;
+      verifiedReference = reference;
+      try {
+        const response = await fetch(`/paystack/verify?reference=${encodeURIComponent(reference)}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Payment verification failed.");
+        publicInvoiceCache[invoiceId] = null;
+        showToast("Payment verified.");
+        fetchPublicInvoice(invoiceId);
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    function paymentReferenceFromUrl() {
+      const searchRef = new URLSearchParams(location.search).get("reference");
+      if (searchRef) return searchRef;
+      const hashQuery = location.hash.includes("?") ? location.hash.split("?")[1] : "";
+      return new URLSearchParams(hashQuery).get("reference") || new URLSearchParams(hashQuery).get("trxref") || "";
+    }
+
+    async function fetchPublicInvoice(id) {
+      if (!canUseBackend || publicInvoiceCache[id]) {
+        root.innerHTML = `<div class="public-page"><div class="invoice-paper"><div class="empty">Invoice not found.</div></div></div>`;
+        return;
+      }
+      try {
+        const response = await fetch(`/api/public/invoices/${encodeURIComponent(id)}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Invoice not found.");
+        publicInvoiceCache[id] = payload;
+        renderPublicInvoice(id);
+      } catch (error) {
+        root.innerHTML = `<div class="public-page"><div class="invoice-paper"><div class="empty">${escapeHtml(error.message)}</div></div></div>`;
+      }
+    }
+
+    function invoiceHtml(invoice, settings = state.settings) {
+      const logo = settings.logoDataUrl
+        ? `<img src="${escapeAttr(settings.logoDataUrl)}" alt="${escapeAttr(settings.businessName)} logo">`
+        : businessInitials(settings.businessName);
+      return `
+        <div style="${invoiceStyleVars(settings)}">
+        <div class="invoice-head">
+          <div class="invoice-brand-block">
+            <div class="invoice-logo">${logo}</div>
+            <div>
+              <h1>${settings.businessName}</h1>
+              <p>${settings.address.replace(/\n/g, "<br>")}</p>
+              <p>${settings.ownerEmail} · ${settings.phone}</p>
+            </div>
+          </div>
+          <div class="invoice-meta">
+            <p><strong>Invoice</strong></p>
+            <h1>${invoice.id}</h1>
+            <p>Issued: ${formatDate(invoice.issueDate)}</p>
+            <p>Due: ${formatDate(invoice.dueDate)}</p>
+          </div>
+        </div>
+        <div class="invoice-content">
+          <div class="bill-grid">
+            <div class="bill-box">
+              <span>Bill to</span>
+              <p><strong>${invoice.customer}</strong><br>${invoice.email}<br>${invoice.phone || ""}</p>
+            </div>
+            <div class="bill-box">
+              <span>Bank transfer</span>
+              <p>${settings.bank.replace(/\n/g, "<br>")}</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Total</th></tr></thead>
+              <tbody>
+                ${invoice.items.map(item => `
+                  <tr>
+                    <td>${item.description}</td>
+                    <td>${item.quantity}</td>
+                    <td>${formatMoney(item.price)}</td>
+                    <td>${formatMoney(Number(item.quantity) * Number(item.price))}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div class="totals">
+            <div><span>Subtotal</span><span>${formatMoney(invoiceSubtotal(invoice))}</span></div>
+            <div><span>VAT (${settings.vatRate}%)</span><span>${formatMoney(invoiceVatWithSettings(invoice, settings))}</span></div>
+            <div><strong>Total</strong><strong>${formatMoney(invoiceTotalWithSettings(invoice, settings))}</strong></div>
+          </div>
+          ${invoice.notes ? `<div class="bill-box"><span>Notes</span><p>${invoice.notes}</p></div>` : ""}
+        </div>
+        </div>
+      `;
+    }
+
+    function invoiceStyleVars(settings = state.settings) {
+      const brandColor = validColor(settings.brandColor, "#107c55");
+      const accentColor = validColor(settings.accentColor, "#2f4f9e");
+      const onBrand = readableTextColor(brandColor);
+      return `--invoice-brand: ${brandColor}; --invoice-accent: ${accentColor}; --invoice-on-brand: ${onBrand};`;
+    }
+
+    function validColor(value, fallback) {
+      return /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
+    }
+
+    function readableTextColor(hex) {
+      const color = hex.replace("#", "");
+      const r = parseInt(color.slice(0, 2), 16);
+      const g = parseInt(color.slice(2, 4), 16);
+      const b = parseInt(color.slice(4, 6), 16);
+      const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+      return brightness > 150 ? "#17201c" : "#ffffff";
+    }
+
+    function businessInitials(name) {
+      const initials = String(name || "LL")
+        .trim()
+        .split(/\s+/)
+        .slice(0, 2)
+        .map(word => word[0]?.toUpperCase() || "")
+        .join("");
+      return initials || "LL";
+    }
+
+    function bindCommonEvents() {
+      document.querySelectorAll("[data-view]").forEach(button => {
+        button.addEventListener("click", () => {
+          activeView = button.dataset.view;
+          render();
+        });
+      });
+      document.querySelector("#logoutButton")?.addEventListener("click", logout);
+    }
+
+    function bindViewEvents() {
+      document.querySelector("#newInvoice")?.addEventListener("click", openInvoiceModal);
+      document.querySelector("#closeInvoiceModal")?.addEventListener("click", closeInvoiceModal);
+      document.querySelector("#addLine")?.addEventListener("click", () => addLineItem());
+      document.querySelector("#invoiceForm")?.addEventListener("submit", createInvoice);
+      document.querySelector("#saveDraft")?.addEventListener("click", () => {
+        const status = document.querySelector("#invoiceForm [name='status']");
+        status.value = "draft";
+        document.querySelector("#invoiceForm").requestSubmit();
+      });
+      document.querySelector("#settingsForm")?.addEventListener("submit", saveSettings);
+      document.querySelector("#logoUpload")?.addEventListener("change", handleLogoUpload);
+      document.querySelector("#removeLogo")?.addEventListener("click", removeLogo);
+      document.querySelector("#exportCsv")?.addEventListener("click", exportCsv);
+      document.querySelector("#copyAllReminders")?.addEventListener("click", copyAllReminders);
+      document.querySelector("#sendBatchEmail")?.addEventListener("click", sendBatchEmail);
+      document.querySelectorAll("[data-filter]").forEach(button => {
+        button.addEventListener("click", () => {
+          statusFilter = button.dataset.filter;
+          render();
+        });
+      });
+      document.querySelectorAll("[data-preview]").forEach(button => button.addEventListener("click", () => previewInvoice(button.dataset.preview)));
+      document.querySelectorAll("[data-copy]").forEach(button => button.addEventListener("click", () => copyInvoiceLink(button.dataset.copy)));
+      document.querySelectorAll("[data-paid]").forEach(button => button.addEventListener("click", () => markPaid(button.dataset.paid)));
+      document.querySelectorAll("[data-copy-reminder]").forEach(button => button.addEventListener("click", () => copyReminder(button.dataset.copyReminder)));
+      document.querySelectorAll("[data-email]").forEach(button => button.addEventListener("click", () => sendEmail(button.dataset.email)));
+      document.querySelectorAll("[data-whatsapp]").forEach(button => button.addEventListener("click", () => sendWhatsApp(button.dataset.whatsapp)));
+    }
+
+    function openInvoiceModal() {
+      document.querySelector("#invoiceModal").classList.add("open");
+      const lineItems = document.querySelector("#lineItems");
+      lineItems.innerHTML = "";
+      addLineItem("Professional service", 1, 100000);
+      updateInvoiceTotals();
+    }
+
+    function closeInvoiceModal() {
+      document.querySelector("#invoiceModal").classList.remove("open");
+    }
+
+    function addLineItem(description = "", quantity = 1, price = 0) {
+      const row = document.createElement("div");
+      row.className = "item-row";
+      row.innerHTML = `
+        <input name="description" placeholder="Description" required value="${escapeAttr(description)}">
+        <input name="quantity" type="number" min="1" step="1" required value="${escapeAttr(quantity)}">
+        <input name="price" type="number" min="0" step="100" required value="${escapeAttr(price)}">
+        <button class="btn icon-only" type="button" title="Remove item">${icons.trash}</button>
+      `;
+      row.querySelectorAll("input").forEach(input => input.addEventListener("input", updateInvoiceTotals));
+      row.querySelector("button").addEventListener("click", () => {
+        if (document.querySelectorAll(".item-row").length > 1) row.remove();
+        updateInvoiceTotals();
+      });
+      document.querySelector("#lineItems").appendChild(row);
+    }
+
+    function updateInvoiceTotals() {
+      const items = readLineItems();
+      const subtotal = items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.price || 0), 0);
+      const vat = subtotal * (Number(state.settings.vatRate || 0) / 100);
+      document.querySelector("#invoiceTotals").innerHTML = `
+        <div><span>Subtotal</span><span>${formatMoney(subtotal)}</span></div>
+        <div><span>VAT (${state.settings.vatRate}%)</span><span>${formatMoney(vat)}</span></div>
+        <div><strong>Total</strong><strong>${formatMoney(subtotal + vat)}</strong></div>
+      `;
+    }
+
+    function readLineItems() {
+      return [...document.querySelectorAll(".item-row")].map(row => ({
+        description: row.querySelector("[name='description']").value.trim(),
+        quantity: Number(row.querySelector("[name='quantity']").value || 0),
+        price: Number(row.querySelector("[name='price']").value || 0)
+      })).filter(item => item.description);
+    }
+
+    function createInvoice(event) {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const items = readLineItems();
+      if (!items.length) {
+        showToast("Add at least one line item.");
+        return;
+      }
+      const invoice = {
+        id: nextInvoiceId(),
+        customer: form.get("customer").trim(),
+        email: form.get("email").trim(),
+        phone: form.get("phone").trim(),
+        issueDate: form.get("issueDate"),
+        dueDate: form.get("dueDate"),
+        status: form.get("status"),
+        notes: form.get("notes").trim(),
+        items,
+        reminders: []
+      };
+      if (invoice.status === "paid") invoice.paidAt = dateOffset(0);
+      state.invoices.unshift(invoice);
+      saveState();
+      closeInvoiceModal();
+      copyInvoiceLink(invoice.id);
+      activeView = "invoices";
+      render();
+    }
+
+    function nextInvoiceId() {
+      const max = state.invoices.reduce((num, invoice) => Math.max(num, Number(invoice.id.replace(/\D/g, "")) || 1000), 1000);
+      return `INV-${max + 1}`;
+    }
+
+    function saveSettings(event) {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const previousLogo = state.settings.logoDataUrl || "";
+      state.settings = {
+        ...state.settings,
+        ...Object.fromEntries(form.entries()),
+        logoDataUrl: previousLogo
+      };
+      state.settings.vatRate = Number(state.settings.vatRate || 0);
+      state.settings.reminderBeforeDays = Number(state.settings.reminderBeforeDays || 0);
+      state.settings.reminderAfterDays = Number(state.settings.reminderAfterDays || 0);
+      saveState();
+      showToast("Settings saved.");
+      render();
+    }
+
+    function handleLogoUpload(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (file.size > 700000) {
+        showToast("Logo is too large. Use an image under 700 KB.");
+        event.target.value = "";
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        state.settings.logoDataUrl = reader.result;
+        saveState();
+        showToast("Logo uploaded.");
+        render();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function removeLogo() {
+      state.settings.logoDataUrl = "";
+      saveState();
+      showToast("Logo removed.");
+      render();
+    }
+
+    function previewInvoice(id) {
+      const invoice = state.invoices.find(item => item.id === id);
+      const modal = document.createElement("div");
+      modal.className = "modal open";
+      modal.innerHTML = `
+        <div class="modal-card">
+          <div class="panel-header no-print">
+            <div>
+              <h3>${invoice.id}</h3>
+              <p>${invoice.customer}</p>
+            </div>
+            <div class="actions">
+              <button class="btn" data-print>${icons.print}Print</button>
+              <button class="btn" data-copy-link>${icons.copy}Copy link</button>
+              <button class="btn primary" data-open-link>${icons.pay}Payment page</button>
+              <button class="btn icon-only" data-close title="Close">${icons.trash.replace("<path d=\"M3 6h18M8 6V4h8v2M6 6l1 16h10l1-16\"/>", "<path d=\"M18 6 6 18M6 6l12 12\"/>")}</button>
+            </div>
+          </div>
+          <section class="invoice-paper" style="${invoiceStyleVars()}">${invoiceHtml(invoice)}</section>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.querySelector("[data-close]").addEventListener("click", () => modal.remove());
+      modal.querySelector("[data-print]").addEventListener("click", () => window.print());
+      modal.querySelector("[data-copy-link]").addEventListener("click", () => copyInvoiceLink(id));
+      modal.querySelector("[data-open-link]").addEventListener("click", () => {
+        modal.remove();
+        location.hash = `pay/${id}`;
+      });
+    }
+
+    function copyInvoiceLink(id) {
+      const invoice = state.invoices.find(item => item.id === id);
+      copyText(shareUrl(invoice));
+      showToast(`Payment link copied for ${invoice.id}.`);
+    }
+
+    function markPaid(id) {
+      const invoice = state.invoices.find(item => item.id === id);
+      invoice.status = "paid";
+      invoice.paidAt = dateOffset(0);
+      saveState();
+      showToast(`${invoice.id} marked as paid.`);
+      render();
+    }
+
+    async function payInvoice(id) {
+      const invoice = state.invoices.find(item => item.id === id);
+      const endpoint = backendReady ? "/paystack/initialize" : "";
+      if (!endpoint) {
+        markPaid(id);
+        showToast("Demo payment complete. Add a backend endpoint in Settings for live Paystack.");
+        location.hash = "";
+        return;
+      }
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            invoiceId: invoice.id,
+            email: invoice.email,
+            amount: Math.round(invoiceTotal(invoice) * 100),
+            currency: "NGN",
+            metadata: { customer: invoice.customer, invoiceId: invoice.id }
+          })
+        });
+        if (!response.ok) throw new Error("Payment initialization failed.");
+        const payload = await response.json();
+        const accessCode = payload.access_code || payload.accessCode || payload.data?.access_code;
+        if (!accessCode) throw new Error("No Paystack access code returned.");
+        if (!window.PaystackPop) throw new Error("Paystack Popup script is not available.");
+        const popup = new PaystackPop();
+        popup.resumeTransaction(accessCode);
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    function copyReminder(id) {
+      const invoice = state.invoices.find(item => item.id === id);
+      copyText(reminderMessage(invoice));
+      recordReminder(invoice, "Copy");
+      showToast("Reminder copied.");
+    }
+
+    function sendEmail(id) {
+      const invoice = state.invoices.find(item => item.id === id);
+      recordReminder(invoice, "Email");
+      openEmailCompose({
+        to: invoice.email,
+        subject: `Payment reminder for ${invoice.id}`,
+        body: reminderMessage(invoice)
+      });
+      saveState();
+      render();
+    }
+
+    function sendWhatsApp(id) {
+      const invoice = state.invoices.find(item => item.id === id);
+      recordReminder(invoice, "WhatsApp");
+      const phone = invoice.phone.replace(/[^\d]/g, "");
+      const text = encodeURIComponent(reminderMessage(invoice));
+      window.open(`https://wa.me/${phone}?text=${text}`, "_blank");
+      saveState();
+      render();
+    }
+
+    function recordReminder(invoice, channel) {
+      invoice.reminders = invoice.reminders || [];
+      invoice.reminders.push({ date: dateOffset(0), channel });
+      saveState();
+    }
+
+    function copyAllReminders() {
+      const text = getReminderQueue().map(row => reminderMessage(row.invoice)).join("\n\n");
+      if (!text) {
+        showToast("No reminders to copy.");
+        return;
+      }
+      copyText(text);
+      showToast("Reminder batch copied.");
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+        return;
+      }
+      fallbackCopy(text);
+    }
+
+    function fallbackCopy(text) {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+
+    function sendBatchEmail() {
+      const queue = getReminderQueue();
+      if (!queue.length) {
+        showToast("No reminders to send.");
+        return;
+      }
+      openEmailCompose({
+        bcc: queue.map(row => row.invoice.email).join(","),
+        subject: "Payment reminders",
+        body: queue.map(row => reminderMessage(row.invoice)).join("\n\n")
+      });
+    }
+
+    function openEmailCompose({ to = "", bcc = "", subject = "", body = "" }) {
+      const params = new URLSearchParams({
+        view: "cm",
+        fs: "1",
+        to,
+        bcc,
+        su: subject,
+        body
+      });
+      const gmailUrl = `https://mail.google.com/mail/?${params.toString()}`;
+      const mailtoParts = [];
+      if (bcc) mailtoParts.push(`bcc=${encodeURIComponent(bcc)}`);
+      mailtoParts.push(`subject=${encodeURIComponent(subject)}`);
+      mailtoParts.push(`body=${encodeURIComponent(body)}`);
+      const mailtoUrl = `mailto:${encodeURIComponent(to)}?${mailtoParts.join("&")}`;
+      const opened = window.open(gmailUrl, "_blank", "noopener");
+      if (!opened) location.href = mailtoUrl;
+    }
+
+    function exportCsv() {
+      const rows = [
+        ["Invoice", "Customer", "Email", "Due date", "Status", "Amount"],
+        ...state.invoices.map(invoice => [invoice.id, invoice.customer, invoice.email, invoice.dueDate, effectiveStatus(invoice), invoiceTotal(invoice)])
+      ];
+      const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "ledgerlink-invoices.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
+      }[char]));
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value);
+    }
+
+    window.addEventListener("hashchange", render);
+    render();
+    hydrateFromBackend();
+  </script>
+</body>
+</html>

@@ -319,7 +319,18 @@ server.on("error", error => {
   throw error;
 });
 
-startServer();
+startServer().catch(error => {
+  console.error("LedgerLink failed to start.");
+  console.error(error.message);
+  if (MONGODB_URI && /SSL|TLS|Server selection|MongoNetwork|ENOTFOUND|ECONN/i.test(String(error.stack || error.message))) {
+    console.error("MongoDB connection checklist:");
+    console.error("1. In MongoDB Atlas, Network Access must allow 0.0.0.0/0 for Render.");
+    console.error("2. Use the standard Drivers connection string, not a private endpoint string.");
+    console.error("3. URL-encode special characters in the database password.");
+    console.error("4. Keep MONGODB_URI as one line in Render environment variables.");
+  }
+  process.exit(1);
+});
 
 async function startServer() {
   await ensureDatabase();
@@ -425,7 +436,11 @@ function getPgPool() {
 async function getMongoCollection() {
   if (!mongoClient) {
     const { MongoClient } = require("mongodb");
-    mongoClient = new MongoClient(MONGODB_URI);
+    mongoClient = new MongoClient(MONGODB_URI, {
+      tls: true,
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000
+    });
     await mongoClient.connect();
   }
   return mongoClient.db(MONGODB_DB).collection("app_state");

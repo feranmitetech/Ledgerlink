@@ -291,7 +291,7 @@ const server = http.createServer(async (req, res) => {
     if (publicInvoice && req.method === "GET") {
       const db = await readDb();
       const token = decodeURIComponent(publicInvoice[1]);
-      const invoice = db.invoices.find(item => item.publicId === token || item.id === token);
+      const invoice = db.invoices.find(item => item.publicId === token);
       if (!invoice) {
         writeJson(res, 404, { error: "Invoice not found." });
         return;
@@ -328,11 +328,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/paystack/initialize" && req.method === "POST") {
       const body = await readJson(req);
       const db = await readDb();
-      const invoice = db.invoices.find(item =>
-        item.publicId === body.publicId ||
-        item.publicId === body.invoiceId ||
-        item.id === body.invoiceId
-      );
+      const invoiceToken = body.publicId || body.invoiceId;
+      const invoice = db.invoices.find(item => item.publicId === invoiceToken);
       if (!invoice || !["pending", "overdue"].includes(effectiveStatus(invoice))) {
         writeJson(res, 404, { error: "Payable invoice not found." });
         return;
@@ -816,7 +813,7 @@ async function verifyPaystack(reference, secretKey) {
 function findInvoiceByReference(db, reference) {
   const match = String(reference || "").match(/^(.+)-\d{10,}$/);
   const invoiceId = match ? match[1] : "";
-  return db.invoices.find(item => item.publicId === invoiceId || item.id === invoiceId);
+  return db.invoices.find(item => item.publicId === invoiceId);
 }
 
 async function markInvoicePaidFromTransaction(transaction) {

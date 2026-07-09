@@ -1852,21 +1852,21 @@
     function invoiceHtml(invoice, settings = state.settings) {
       const logo = settings.logoDataUrl
         ? `<img src="${escapeAttr(settings.logoDataUrl)}" alt="${escapeAttr(settings.businessName)} logo">`
-        : businessInitials(settings.businessName);
+        : escapeHtml(businessInitials(settings.businessName));
       return `
         <div style="${invoiceStyleVars(settings)}">
         <div class="invoice-head">
           <div class="invoice-brand-block">
             <div class="invoice-logo">${logo}</div>
             <div>
-              <h1>${settings.businessName}</h1>
-              <p>${settings.address.replace(/\n/g, "<br>")}</p>
-              <p>${settings.ownerEmail} · ${settings.phone}</p>
+              <h1>${escapeHtml(settings.businessName)}</h1>
+              <p>${escapeHtml(settings.address).replace(/\n/g, "<br>")}</p>
+              <p>${escapeHtml(settings.ownerEmail)} · ${escapeHtml(settings.phone)}</p>
             </div>
           </div>
           <div class="invoice-meta">
             <p><strong>Invoice</strong></p>
-            <h1>${invoice.id}</h1>
+            <h1>${escapeHtml(invoice.id)}</h1>
             <p>Issued: ${formatDate(invoice.issueDate)}</p>
             <p>Due: ${formatDate(invoice.dueDate)}</p>
           </div>
@@ -1875,11 +1875,11 @@
           <div class="bill-grid">
             <div class="bill-box">
               <span>Bill to</span>
-              <p><strong>${invoice.customer}</strong><br>${invoice.email}<br>${invoice.phone || ""}</p>
+              <p><strong>${escapeHtml(invoice.customer)}</strong><br>${escapeHtml(invoice.email)}<br>${escapeHtml(invoice.phone || "")}</p>
             </div>
             <div class="bill-box">
               <span>Bank transfer</span>
-              <p>${settings.bank.replace(/\n/g, "<br>")}</p>
+              <p>${escapeHtml(settings.bank).replace(/\n/g, "<br>")}</p>
             </div>
           </div>
           <div class="table-wrap">
@@ -1888,8 +1888,8 @@
               <tbody>
                 ${invoice.items.map(item => `
                   <tr>
-                    <td>${item.description}</td>
-                    <td>${item.quantity}</td>
+                    <td>${escapeHtml(item.description)}</td>
+                    <td>${escapeHtml(item.quantity)}</td>
                     <td>${formatMoney(item.price)}</td>
                     <td>${formatMoney(Number(item.quantity) * Number(item.price))}</td>
                   </tr>
@@ -1899,10 +1899,10 @@
           </div>
           <div class="totals">
             <div><span>Subtotal</span><span>${formatMoney(invoiceSubtotal(invoice))}</span></div>
-            <div><span>VAT (${settings.vatRate}%)</span><span>${formatMoney(invoiceVatWithSettings(invoice, settings))}</span></div>
+            <div><span>VAT (${escapeHtml(settings.vatRate)}%)</span><span>${formatMoney(invoiceVatWithSettings(invoice, settings))}</span></div>
             <div><strong>Total</strong><strong>${formatMoney(invoiceTotalWithSettings(invoice, settings))}</strong></div>
           </div>
-          ${invoice.notes ? `<div class="bill-box"><span>Notes</span><p>${invoice.notes}</p></div>` : ""}
+          ${invoice.notes ? `<div class="bill-box"><span>Notes</span><p>${escapeHtml(invoice.notes)}</p></div>` : ""}
         </div>
         </div>
       `;

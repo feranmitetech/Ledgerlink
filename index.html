@@ -1274,6 +1274,11 @@
 
       verifyReturnedBillingPayment();
 
+      if (backendReady && currentUser && state.billing?.active !== true) {
+        renderBillingWall();
+        return;
+      }
+
       root.innerHTML = `
         <div class="app-shell">
           <aside class="sidebar">
@@ -1331,6 +1336,39 @@
         render();
         hydrateFromBackend();
       });
+    }
+
+    function renderBillingWall() {
+      root.innerHTML = `
+        <div class="auth-page">
+          <section class="auth-brand">
+            <div class="brand">
+              <div class="brand-mark">${icons.invoice}</div>
+              <div>
+                <h1>LedgerLink</h1>
+                <span>Invoices for Nigerian SMEs</span>
+              </div>
+            </div>
+            <div>
+              <h1>Activate your workspace.</h1>
+              <p>Your account is ready. Renew the monthly plan to create invoices, connect Paystack, and manage reminders.</p>
+            </div>
+            <p>Built by Feranmite Technology Â· Lagos, Nigeria</p>
+          </section>
+          <section class="auth-form-wrap">
+            <div class="auth-card">
+              <h2>LedgerLink monthly plan</h2>
+              <p>${formatMoney(state.billing?.priceNaira || 12000)} per month. Access runs for 30 days after each successful payment.</p>
+              <div class="actions" style="justify-content: stretch;">
+                <button class="btn primary" id="renewPlan" type="button">${icons.pay}Pay and activate</button>
+                <button class="btn" id="logoutButton" type="button">Sign out</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      `;
+      document.querySelector("#renewPlan")?.addEventListener("click", startBillingPayment);
+      document.querySelector("#logoutButton")?.addEventListener("click", logout);
     }
 
     function renderAuth() {

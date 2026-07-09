@@ -188,13 +188,12 @@ const server = http.createServer(async (req, res) => {
       if (!user) return;
       const body = await readJson(req);
       const business = getBusinessForUser(db, user);
-      business.settings = sanitizeSettings(body.settings || {});
-      const currentInvoices = db.invoices.filter(invoice => invoice.businessId === business.id);
-      const incomingInvoices = Array.isArray(body.invoices) ? body.invoices : [];
-      if (!subscriptionStatus(business).active && incomingInvoices.length > currentInvoices.length) {
-        writeJson(res, 402, { error: "This LedgerLink subscription is inactive. Renew the plan before creating new invoices." });
+      if (!subscriptionStatus(business).active) {
+        writeJson(res, 402, { error: "This LedgerLink subscription is inactive. Renew the plan before changing your workspace." });
         return;
       }
+      business.settings = sanitizeSettings(body.settings || {});
+      const incomingInvoices = Array.isArray(body.invoices) ? body.invoices : [];
       db.invoices = db.invoices.filter(invoice => invoice.businessId !== business.id);
       db.invoices.push(...incomingInvoices.map(invoice => ({
         ...sanitizeInvoice(invoice),
@@ -208,13 +207,17 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/business/paystack" && req.method === "PUT") {
       const { user, db } = await requireUser(req, res);
       if (!user) return;
+      const business = getBusinessForUser(db, user);
+      if (!subscriptionStatus(business).active) {
+        writeJson(res, 402, { error: "Renew the LedgerLink plan before connecting Paystack." });
+        return;
+      }
       const body = await readJson(req);
       const secretKey = String(body.secretKey || "").trim();
       if (!/^sk_(test|live)_/i.test(secretKey)) {
         writeJson(res, 400, { error: "Enter a valid Paystack secret key. It should start with sk_test_ or sk_live_." });
         return;
       }
-      const business = getBusinessForUser(db, user);
       business.paystack = {
         secretKeyEncrypted: encryptSecret(secretKey),
         keyLast4: secretKey.slice(-4),
@@ -307,6 +310,10 @@ const server = http.createServer(async (req, res) => {
       const { user, db } = await requireUser(req, res);
       if (!user) return;
       const business = getBusinessForUser(db, user);
+      if (!subscriptionStatus(business).active) {
+        writeJson(res, 402, { error: "Renew the LedgerLink plan before editing invoices." });
+        return;
+      }
       const invoice = db.invoices.find(item => item.id === decodeURIComponent(invoicePatch[1]) && item.businessId === business.id);
       if (!invoice) {
         writeJson(res, 404, { error: "Invoice not found." });

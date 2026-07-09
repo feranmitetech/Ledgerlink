@@ -1600,8 +1600,8 @@
             <tbody>
               ${invoices.map(invoice => `
                 <tr>
-                  <td><strong>${invoice.id}</strong></td>
-                  <td class="customer-cell"><strong>${invoice.customer}</strong><span>${invoice.email}</span></td>
+                  <td><strong>${escapeHtml(invoice.id)}</strong></td>
+                  <td class="customer-cell"><strong>${escapeHtml(invoice.customer)}</strong><span>${escapeHtml(invoice.email)}</span></td>
                   <td>${formatDate(invoice.dueDate)}</td>
                   <td><span class="status ${effectiveStatus(invoice)}">${statusLabel(effectiveStatus(invoice))}</span></td>
                   <td><strong>${formatMoney(invoiceTotal(invoice))}</strong></td>
@@ -1649,7 +1649,7 @@
           <article class="reminder">
             <div class="reminder-top">
               <div>
-                <strong>${invoice.customer} - ${invoice.id}</strong>
+                <strong>${escapeHtml(invoice.customer)} - ${escapeHtml(invoice.id)}</strong>
                 <span>${dueIn < 0 ? `${Math.abs(dueIn)} day${Math.abs(dueIn) === 1 ? "" : "s"} overdue` : `Due in ${dueIn} day${dueIn === 1 ? "" : "s"}`} · ${formatMoney(invoiceTotal(invoice))}</span>
               </div>
               <span class="status ${effectiveStatus(invoice)}">${statusLabel(effectiveStatus(invoice))}</span>
@@ -2200,8 +2200,8 @@
         <div class="modal-card">
           <div class="panel-header no-print">
             <div>
-              <h3>${invoice.id}</h3>
-              <p>${invoice.customer}</p>
+              <h3>${escapeHtml(invoice.id)}</h3>
+              <p>${escapeHtml(invoice.customer)}</p>
             </div>
             <div class="actions">
               <button class="btn" data-print>${icons.print}Print</button>

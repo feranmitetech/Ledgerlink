@@ -10,6 +10,7 @@ const PORT = Number(process.env.PORT || 8787);
 const PLATFORM_PAYSTACK_SECRET_KEY = (process.env.PLATFORM_PAYSTACK_SECRET_KEY || "").trim();
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
 const APP_SECRET = (process.env.APP_SECRET || "").trim();
+const ADMIN_API_TOKEN = (process.env.ADMIN_API_TOKEN || "").trim();
 const BILLING_PRICE_KOBO = Number(process.env.LEDGERLINK_MONTHLY_PRICE_KOBO || 1200000);
 const BILLING_DURATION_DAYS = Number(process.env.LEDGERLINK_BILLING_DAYS || 30);
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
@@ -22,6 +23,7 @@ const SESSION_COOKIE = "ledgerlink_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 let pgPool = null;
 let mongoClient = null;
+const rateLimitBuckets = new Map();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -93,7 +95,7 @@ const seedInvoices = [
 
 const server = http.createServer(async (req, res) => {
   try {
-    setCors(res);
+    setSecurityHeaders(res);
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -102,6 +104,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (!allowSameOriginMutation(req, url)) {
+      writeJson(res, 403, { error: "Cross-origin request blocked." });
+      return;
+    }
 
     if (url.pathname === "/health" && req.method === "GET") {
       writeJson(res, 200, { ok: true, service: "ledgerlink", time: new Date().toISOString() });
@@ -115,6 +121,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/auth/register" && req.method === "POST") {
+      if (!checkRateLimit(req, res, "auth:register", 5, 15 * 60 * 1000)) return;
       const body = await readJson(req);
       const db = await readDb();
       const email = normalizeEmail(body.email);
@@ -151,6 +158,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/auth/login" && req.method === "POST") {
+      if (!checkRateLimit(req, res, "auth:login", 8, 15 * 60 * 1000)) return;
       const body = await readJson(req);
       const db = await readDb();
       const user = db.users.find(item => item.email === normalizeEmail(body.email));
@@ -237,6 +245,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/billing/initialize" && req.method === "POST") {
+      if (!checkRateLimit(req, res, "billing:init", 10, 10 * 60 * 1000)) return;
       requirePlatformSecret();
       const { user, db } = await requireUser(req, res);
       if (!user) return;
@@ -267,6 +276,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/billing/verify" && req.method === "GET") {
+      if (!checkRateLimit(req, res, "billing:verify", 30, 10 * 60 * 1000)) return;
       requirePlatformSecret();
       const { user, db } = await requireUser(req, res);
       if (!user) return;
@@ -289,6 +299,7 @@ const server = http.createServer(async (req, res) => {
 
     const publicInvoice = url.pathname.match(/^\/api\/public\/invoices\/([^/]+)$/);
     if (publicInvoice && req.method === "GET") {
+      if (!checkRateLimit(req, res, "public:invoice", 120, 10 * 60 * 1000)) return;
       const db = await readDb();
       const token = decodeURIComponent(publicInvoice[1]);
       const invoice = db.invoices.find(item => item.publicId === token);
@@ -326,6 +337,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/paystack/initialize" && req.method === "POST") {
+      if (!checkRateLimit(req, res, "paystack:init", 30, 10 * 60 * 1000)) return;
       const body = await readJson(req);
       const db = await readDb();
       const invoiceToken = body.publicId || body.invoiceId;
@@ -379,6 +391,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/paystack/verify" && req.method === "GET") {
+      if (!checkRateLimit(req, res, "paystack:verify", 60, 10 * 60 * 1000)) return;
       const reference = url.searchParams.get("reference");
       if (!reference) {
         writeJson(res, 400, { error: "Missing transaction reference." });
@@ -408,7 +421,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/admin/subscriptions" && req.method === "POST") {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const result = await setSubscriptionByAdmin(body);
+      writeJson(res, 200, result);
+      return;
+    }
+
     if (url.pathname === "/paystack/webhook" && req.method === "POST") {
+      if (!checkRateLimit(req, res, "paystack:webhook", 240, 10 * 60 * 1000)) return;
       const rawBody = await readRaw(req);
       const signature = String(req.headers["x-paystack-signature"] || "");
       const webhookMatch = await matchPaystackWebhookSecret(rawBody, signature);
@@ -863,6 +885,47 @@ async function markSubscriptionPaidFromTransaction(transaction, expectedUserId =
   return { ok: true, expiresAt };
 }
 
+async function setSubscriptionByAdmin(body) {
+  const email = normalizeEmail(body.email);
+  const action = String(body.action || "activate").toLowerCase();
+  const days = Number(body.days || BILLING_DURATION_DAYS);
+  if (!email) {
+    const error = new Error("Admin subscription update requires an email.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!["activate", "deactivate"].includes(action)) {
+    const error = new Error("Admin subscription action must be activate or deactivate.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const db = await readDb();
+  const user = db.users.find(item => item.email === email);
+  if (!user) {
+    const error = new Error("User not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const business = getBusinessForUser(db, user);
+  if (action === "deactivate") {
+    business.subscription = {
+      status: "inactive",
+      expiresAt: "",
+      paystackReference: "manual-admin-deactivate",
+      updatedAt: new Date().toISOString()
+    };
+  } else {
+    business.subscription = {
+      status: "active",
+      expiresAt: new Date(Date.now() + Math.max(1, days) * 86400000).toISOString(),
+      paystackReference: "manual-admin-activate",
+      updatedAt: new Date().toISOString()
+    };
+  }
+  await writeDb(db);
+  return { ok: true, email, billing: subscriptionStatus(business) };
+}
+
 function businessPaystackSecret(business) {
   const encrypted = business?.paystack?.secretKeyEncrypted;
   return encrypted ? decryptSecret(encrypted) : "";
@@ -962,10 +1025,60 @@ function dateOffset(days) {
   return date.toISOString().slice(0, 10);
 }
 
-function setCors(res) {
+function setSecurityHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "null");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,x-paystack-signature");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,x-paystack-signature,x-admin-token");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://js.paystack.co; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src https://checkout.paystack.com https://*.paystack.co; base-uri 'self'; form-action 'self'"
+  );
+  if (IS_PRODUCTION) {
+    res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+  }
+}
+
+function allowSameOriginMutation(req, url) {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return true;
+  if (url.pathname === "/paystack/webhook") return true;
+  const origin = req.headers.origin || "";
+  const referer = req.headers.referer || "";
+  const expected = PUBLIC_BASE_URL || `http://${req.headers.host}`;
+  if (origin) return normalizeOrigin(origin) === normalizeOrigin(expected);
+  if (referer) return normalizeOrigin(referer) === normalizeOrigin(expected);
+  return true;
+}
+
+function normalizeOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "";
+  }
+}
+
+function checkRateLimit(req, res, scope, limit, windowMs) {
+  const key = `${scope}:${clientIp(req)}`;
+  const now = Date.now();
+  const bucket = rateLimitBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    rateLimitBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  bucket.count += 1;
+  if (bucket.count <= limit) return true;
+  const retryAfter = Math.ceil((bucket.resetAt - now) / 1000);
+  res.setHeader("Retry-After", String(retryAfter));
+  writeJson(res, 429, { error: "Too many requests. Try again shortly." });
+  return false;
+}
+
+function clientIp(req) {
+  return String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
 }
 
 function setSessionCookie(res, sessionId) {
@@ -988,6 +1101,22 @@ function requirePlatformSecret() {
   if (!PLATFORM_PAYSTACK_SECRET_KEY) {
     const error = new Error("PLATFORM_PAYSTACK_SECRET_KEY is not configured.");
     error.statusCode = 500;
+    throw error;
+  }
+}
+
+function requireAdmin(req) {
+  if (!ADMIN_API_TOKEN || ADMIN_API_TOKEN.length < 24) {
+    const error = new Error("ADMIN_API_TOKEN is not configured.");
+    error.statusCode = 500;
+    throw error;
+  }
+  const token = String(req.headers["x-admin-token"] || "");
+  const expected = Buffer.from(ADMIN_API_TOKEN);
+  const received = Buffer.from(token);
+  if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
+    const error = new Error("Admin access denied.");
+    error.statusCode = 403;
     throw error;
   }
 }

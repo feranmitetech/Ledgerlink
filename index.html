@@ -563,6 +563,47 @@
       color: var(--muted);
     }
 
+    .billing-alert {
+      margin-bottom: 16px;
+      border: 1px solid #f0c36a;
+      background: #fff8e6;
+      color: #4d3500;
+      border-radius: 8px;
+      padding: 13px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .billing-alert strong {
+      display: block;
+      margin-bottom: 3px;
+    }
+
+    .billing-alert span {
+      color: #73520c;
+      font-size: 13px;
+    }
+
+    .settings-stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    .key-status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--muted);
+      padding: 0 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
     .reminder-list {
       display: grid;
       gap: 10px;
@@ -868,6 +909,11 @@
     }
 
     @media print {
+      * {
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+      }
+
       body {
         background: #fff;
       }
@@ -892,6 +938,35 @@
       .invoice-paper {
         border: 0;
         box-shadow: none;
+      }
+
+      .invoice-head {
+        background: var(--invoice-brand) !important;
+        color: var(--invoice-on-brand) !important;
+      }
+
+      .invoice-meta h1 {
+        color: var(--invoice-on-brand) !important;
+      }
+
+      .invoice-logo {
+        background: #ffffff !important;
+        color: var(--invoice-brand) !important;
+      }
+
+      .status.paid {
+        background: var(--teal-soft) !important;
+        color: var(--green-dark) !important;
+      }
+
+      .status.pending {
+        background: var(--amber-soft) !important;
+        color: var(--amber) !important;
+      }
+
+      .status.overdue {
+        background: var(--red-soft) !important;
+        color: var(--red) !important;
       }
     }
   </style>
@@ -921,6 +996,7 @@
     let authMode = "login";
     let publicInvoiceCache = {};
     let verifiedReference = "";
+    let verifiedBillingReference = "";
     let saveTimer = null;
 
     const icons = {
@@ -951,6 +1027,8 @@
         reminderAfterDays: 1,
         vatRate: 7.5
       },
+      paystack: { configured: false, keyLast4: "", mode: "", updatedAt: "" },
+      billing: { active: false, status: "inactive", priceKobo: 1200000, priceNaira: 12000, daysLeft: 0, expiresAt: "" },
       invoices: [
         {
           id: "INV-1007",
@@ -1012,15 +1090,48 @@
       const saved = localStorage.getItem(STORAGE_KEY);
       if (!saved) return structuredClone(seedState);
       try {
-        return JSON.parse(saved);
+        return normalizeState(JSON.parse(saved));
       } catch {
         return structuredClone(seedState);
       }
     }
 
+    function normalizeState(value) {
+      return {
+        ...structuredClone(seedState),
+        ...value,
+        settings: { ...seedState.settings, ...(value?.settings || {}) },
+        paystack: { ...seedState.paystack, ...(value?.paystack || {}) },
+        billing: { ...seedState.billing, ...(value?.billing || {}) },
+        invoices: Array.isArray(value?.invoices)
+          ? value.invoices.map(invoice => ({ ...invoice, publicId: invoice.publicId || newPublicId() }))
+          : []
+      };
+    }
+
     function saveState() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       queueBackendSave();
+    }
+
+    async function saveStateNow() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      if (!backendReady || (canUseBackend && !currentUser)) return state;
+      const response = await fetch("/api/state", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(state)
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error("The running server is older. Restart with the latest server.js.");
+        }
+        throw new Error(payload.error || "Could not sync changes to the backend.");
+      }
+      state = normalizeState(payload);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      return state;
     }
 
     async function hydrateFromBackend() {
@@ -1039,7 +1150,7 @@
         authChecked = true;
         currentUser = payload.authenticated ? payload.user : null;
         if (payload.state) {
-          state = payload.state;
+          state = normalizeState(payload.state);
           localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         }
         render();
@@ -1055,11 +1166,7 @@
       if (!backendReady || (canUseBackend && !currentUser)) return;
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
-        fetch("/api/state", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(state)
-        }).catch(() => {
+        saveStateNow().catch(() => {
           backendReady = false;
           showToast("Backend sync paused. Changes are saved in this browser.");
         });
@@ -1117,7 +1224,7 @@
     }
 
     function shareUrl(invoice) {
-      return `${location.origin}${location.pathname}#pay/${invoice.id}`;
+      return `${location.origin}${location.pathname}#pay/${invoice.publicId || invoice.id}`;
     }
 
     function reminderMessage(invoice) {
@@ -1164,6 +1271,8 @@
         renderAuth();
         return;
       }
+
+      verifyReturnedBillingPayment();
 
       root.innerHTML = `
         <div class="app-shell">
@@ -1283,7 +1392,7 @@
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Authentication failed.");
         currentUser = payload.user;
-        state = payload.state;
+        state = normalizeState(payload.state);
         backendReady = true;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         showToast(authMode === "register" ? "Account created." : "Signed in.");
@@ -1314,6 +1423,7 @@
       const metrics = getMetrics();
       const recent = [...state.invoices].sort((a, b) => b.id.localeCompare(a.id)).slice(0, 5);
       return `
+        ${billingBanner()}
         <section class="topbar">
           <div class="title-block">
             <h2>Receivables command center</h2>
@@ -1353,6 +1463,27 @@
         </section>
         ${invoiceModal()}
       `;
+    }
+
+    function billingBanner() {
+      if (!backendReady || !state.billing || state.billing.active) return "";
+      return `
+        <section class="billing-alert">
+          <div>
+            <strong>LedgerLink plan inactive</strong>
+            <span>Renew the monthly plan to collect invoice payments through this workspace.</span>
+          </div>
+          <button class="btn primary" id="renewPlan">${icons.pay}Renew ${formatMoney(state.billing.priceNaira || 12000)}</button>
+        </section>
+      `;
+    }
+
+    function billingLabel() {
+      if (!state.billing) return "Not available";
+      if (state.billing.active) {
+        return `Active${state.billing.daysLeft ? ` - ${state.billing.daysLeft} day${state.billing.daysLeft === 1 ? "" : "s"} left` : ""}`;
+      }
+      return "Inactive";
     }
 
     function metricCard(label, value, note) {
@@ -1504,36 +1635,71 @@
             <p>Configure your business profile, invoice branding, VAT, and reminder rules.</p>
           </div>
         </section>
-        <section class="panel">
-          <form class="panel-body form-grid" id="settingsForm">
-            <label>Business name<input name="businessName" value="${escapeAttr(s.businessName)}"></label>
-            <label>Owner email<input type="email" name="ownerEmail" value="${escapeAttr(s.ownerEmail)}"></label>
-            <label>Phone<input name="phone" value="${escapeAttr(s.phone)}"></label>
-            <label>VAT rate (%)<input type="number" step="0.1" min="0" name="vatRate" value="${escapeAttr(s.vatRate)}"></label>
-            <label class="full">Address<textarea name="address">${escapeHtml(s.address)}</textarea></label>
-            <label class="full">Bank transfer details<textarea name="bank">${escapeHtml(s.bank)}</textarea></label>
-            <div class="full brand-settings">
-              <div class="logo-preview" id="logoPreview">
-                ${s.logoDataUrl ? `<img src="${escapeAttr(s.logoDataUrl)}" alt="Business logo">` : "No logo uploaded"}
+        <div class="settings-stack">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Billing plan</h3>
+                <p>LedgerLink access renews every 30 days.</p>
               </div>
-              <div class="form-grid">
-                <label class="full">Brand logo<input type="file" id="logoUpload" accept="image/png,image/jpeg,image/webp,image/svg+xml"></label>
-                <div class="swatches full">
-                  <label>Brand color<input type="color" name="brandColor" value="${escapeAttr(s.brandColor || "#107c55")}"></label>
-                  <label>Accent color<input type="color" name="accentColor" value="${escapeAttr(s.accentColor || "#2f4f9e")}"></label>
+              <span class="key-status">${billingLabel()}</span>
+            </div>
+            <div class="panel-body">
+              <div class="billing-alert" style="margin-bottom: 0;">
+                <div>
+                  <strong>${formatMoney(state.billing?.priceNaira || 12000)} per month</strong>
+                  <span>${state.billing?.active ? `Next renewal: ${state.billing.expiresAt ? formatDate(state.billing.expiresAt) : "not set"}` : "Plan is inactive. Renew to collect customer payments."}</span>
                 </div>
-                <div class="full actions">
-                  <button class="btn small" type="button" id="removeLogo">Remove logo</button>
-                </div>
+                <button class="btn primary" id="renewPlan" type="button">${icons.pay}Renew plan</button>
               </div>
             </div>
-            <label>Reminder before due date (days)<input type="number" min="0" name="reminderBeforeDays" value="${escapeAttr(s.reminderBeforeDays)}"></label>
-            <label>Reminder after due date (days)<input type="number" min="0" name="reminderAfterDays" value="${escapeAttr(s.reminderAfterDays)}"></label>
-            <div class="full actions">
-              <button class="btn primary" type="submit">Save settings</button>
+          </section>
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Customer payment collection</h3>
+                <p>Each business connects its own Paystack account for invoice payments.</p>
+              </div>
+              <span class="key-status">${state.paystack?.configured ? `${state.paystack.mode || "Paystack"} key ending ${state.paystack.keyLast4}` : "Not connected"}</span>
             </div>
-          </form>
-        </section>
+            <div class="panel-body form-grid">
+              <label class="full">Business Paystack secret key<input id="merchantPaystackKey" type="password" autocomplete="off" placeholder="sk_test_... or sk_live_..."></label>
+              <div class="full actions">
+                <button class="btn primary" id="savePaystackKey" type="button">Save Paystack key</button>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <form class="panel-body form-grid" id="settingsForm">
+              <label>Business name<input name="businessName" value="${escapeAttr(s.businessName)}"></label>
+              <label>Owner email<input type="email" name="ownerEmail" value="${escapeAttr(s.ownerEmail)}"></label>
+              <label>Phone<input name="phone" value="${escapeAttr(s.phone)}"></label>
+              <label>VAT rate (%)<input type="number" step="0.1" min="0" name="vatRate" value="${escapeAttr(s.vatRate)}"></label>
+              <label class="full">Address<textarea name="address">${escapeHtml(s.address)}</textarea></label>
+              <label class="full">Bank transfer details<textarea name="bank">${escapeHtml(s.bank)}</textarea></label>
+              <div class="full brand-settings">
+                <div class="logo-preview" id="logoPreview">
+                  ${s.logoDataUrl ? `<img src="${escapeAttr(s.logoDataUrl)}" alt="Business logo">` : "No logo uploaded"}
+                </div>
+                <div class="form-grid">
+                  <label class="full">Brand logo<input type="file" id="logoUpload" accept="image/png,image/jpeg,image/webp,image/svg+xml"></label>
+                  <div class="swatches full">
+                    <label>Brand color<input type="color" name="brandColor" value="${escapeAttr(s.brandColor || "#107c55")}"></label>
+                    <label>Accent color<input type="color" name="accentColor" value="${escapeAttr(s.accentColor || "#2f4f9e")}"></label>
+                  </div>
+                  <div class="full actions">
+                    <button class="btn small" type="button" id="removeLogo">Remove logo</button>
+                  </div>
+                </div>
+              </div>
+              <label>Reminder before due date (days)<input type="number" min="0" name="reminderBeforeDays" value="${escapeAttr(s.reminderBeforeDays)}"></label>
+              <label>Reminder after due date (days)<input type="number" min="0" name="reminderAfterDays" value="${escapeAttr(s.reminderAfterDays)}"></label>
+              <div class="full actions">
+                <button class="btn primary" type="submit">Save settings</button>
+              </div>
+            </form>
+          </section>
+        </div>
       `;
     }
 
@@ -1574,7 +1740,7 @@
 
     function renderPublicInvoice(id) {
       const cached = publicInvoiceCache[id];
-      const invoice = cached?.invoice || state.invoices.find(item => item.id === id);
+      const invoice = cached?.invoice || state.invoices.find(item => item.publicId === id || item.id === id);
       const invoiceSettings = cached?.settings || state.settings;
       if (!invoice) {
         root.innerHTML = `<div class="public-page"><div class="invoice-paper"><div class="empty">Loading invoice...</div></div></div>`;
@@ -1602,7 +1768,7 @@
       document.querySelector("#backToApp")?.addEventListener("click", () => {
         location.hash = "";
       });
-      document.querySelector("#payInvoice")?.addEventListener("click", () => payInvoice(invoice.id));
+      document.querySelector("#payInvoice")?.addEventListener("click", () => payInvoice(invoice.publicId || invoice.id));
       verifyReturnedPayment(id);
     }
 
@@ -1757,6 +1923,8 @@
       document.querySelector("#settingsForm")?.addEventListener("submit", saveSettings);
       document.querySelector("#logoUpload")?.addEventListener("change", handleLogoUpload);
       document.querySelector("#removeLogo")?.addEventListener("click", removeLogo);
+      document.querySelector("#savePaystackKey")?.addEventListener("click", savePaystackKey);
+      document.querySelector("#renewPlan")?.addEventListener("click", startBillingPayment);
       document.querySelector("#exportCsv")?.addEventListener("click", exportCsv);
       document.querySelector("#copyAllReminders")?.addEventListener("click", copyAllReminders);
       document.querySelector("#sendBatchEmail")?.addEventListener("click", sendBatchEmail);
@@ -1775,6 +1943,7 @@
     }
 
     function openInvoiceModal() {
+      if (!canCreateInvoice()) return;
       document.querySelector("#invoiceModal").classList.add("open");
       const lineItems = document.querySelector("#lineItems");
       lineItems.innerHTML = "";
@@ -1822,8 +1991,9 @@
       })).filter(item => item.description);
     }
 
-    function createInvoice(event) {
+    async function createInvoice(event) {
       event.preventDefault();
+      if (!canCreateInvoice()) return;
       const form = new FormData(event.currentTarget);
       const items = readLineItems();
       if (!items.length) {
@@ -1832,6 +2002,7 @@
       }
       const invoice = {
         id: nextInvoiceId(),
+        publicId: newPublicId(),
         customer: form.get("customer").trim(),
         email: form.get("email").trim(),
         phone: form.get("phone").trim(),
@@ -1844,16 +2015,36 @@
       };
       if (invoice.status === "paid") invoice.paidAt = dateOffset(0);
       state.invoices.unshift(invoice);
-      saveState();
-      closeInvoiceModal();
-      copyInvoiceLink(invoice.id);
-      activeView = "invoices";
-      render();
+      try {
+        await saveStateNow();
+        closeInvoiceModal();
+        copyInvoiceLink(invoice.id);
+        activeView = "invoices";
+        render();
+      } catch (error) {
+        state.invoices = state.invoices.filter(item => item.publicId !== invoice.publicId);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        showToast(error.message);
+      }
+    }
+
+    function canCreateInvoice() {
+      if (!backendReady || state.billing?.active !== false) return true;
+      showToast("Renew your LedgerLink plan before creating new invoices.");
+      return false;
     }
 
     function nextInvoiceId() {
-      const max = state.invoices.reduce((num, invoice) => Math.max(num, Number(invoice.id.replace(/\D/g, "")) || 1000), 1000);
-      return `INV-${max + 1}`;
+      const max = state.invoices.reduce((num, invoice) => {
+        const match = String(invoice.id || "").match(/^INV-(\d{1,3})$/i);
+        return Math.max(num, match ? Number(match[1]) : 0);
+      }, 0);
+      return `INV-${String(max + 1).padStart(3, "0")}`;
+    }
+
+    function newPublicId() {
+      if (crypto.randomUUID) return `inv_${crypto.randomUUID().replace(/-/g, "")}`;
+      return `inv_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     }
 
     function saveSettings(event) {
@@ -1871,6 +2062,71 @@
       saveState();
       showToast("Settings saved.");
       render();
+    }
+
+    async function savePaystackKey() {
+      const input = document.querySelector("#merchantPaystackKey");
+      const secretKey = input?.value.trim();
+      if (!secretKey) {
+        showToast("Enter the business Paystack secret key first.");
+        return;
+      }
+      try {
+        const response = await fetch("/api/business/paystack", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ secretKey })
+        });
+        const payload = await response.json();
+        if (response.status === 404) throw new Error("The running server is older. Restart with the latest server.js.");
+        if (!response.ok) throw new Error(payload.error || "Could not save Paystack key.");
+        state.paystack = payload.paystack;
+        input.value = "";
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        showToast("Paystack key saved securely.");
+        render();
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function startBillingPayment() {
+      if (!backendReady) {
+        showToast("Start the backend before renewing a plan.");
+        return;
+      }
+      try {
+        const response = await fetch("/api/billing/initialize", { method: "POST" });
+        const payload = await response.json();
+        if (response.status === 404) throw new Error("The running server is older. Restart with the latest server.js.");
+        if (!response.ok) throw new Error(payload.error || "Could not start renewal payment.");
+        const accessCode = payload.access_code || payload.accessCode || payload.data?.access_code;
+        if (!accessCode) throw new Error("No Paystack access code returned.");
+        if (!window.PaystackPop) throw new Error("Paystack Popup script is not available.");
+        const popup = new PaystackPop();
+        popup.resumeTransaction(accessCode);
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function verifyReturnedBillingPayment() {
+      const params = new URLSearchParams(location.search);
+      const reference = params.get("billing") === "return" ? (params.get("reference") || params.get("trxref") || "") : "";
+      if (!reference || reference === verifiedBillingReference || !backendReady || !currentUser) return;
+      verifiedBillingReference = reference;
+      try {
+        const response = await fetch(`/api/billing/verify?reference=${encodeURIComponent(reference)}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Billing verification failed.");
+        if (payload.billing) state.billing = payload.billing;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        history.replaceState(null, "", `${location.pathname}${location.hash}`);
+        showToast("LedgerLink plan renewed.");
+        hydrateFromBackend();
+      } catch (error) {
+        showToast(error.message);
+      }
     }
 
     function handleLogoUpload(event) {
@@ -1899,7 +2155,7 @@
     }
 
     function previewInvoice(id) {
-      const invoice = state.invoices.find(item => item.id === id);
+      const invoice = state.invoices.find(item => item.id === id || item.publicId === id);
       const modal = document.createElement("div");
       modal.className = "modal open";
       modal.innerHTML = `
@@ -1930,7 +2186,7 @@
     }
 
     function copyInvoiceLink(id) {
-      const invoice = state.invoices.find(item => item.id === id);
+      const invoice = state.invoices.find(item => item.id === id || item.publicId === id);
       copyText(shareUrl(invoice));
       showToast(`Payment link copied for ${invoice.id}.`);
     }
@@ -1945,11 +2201,16 @@
     }
 
     async function payInvoice(id) {
-      const invoice = state.invoices.find(item => item.id === id);
+      const invoice = state.invoices.find(item => item.id === id || item.publicId === id) || publicInvoiceCache[id]?.invoice;
+      const paystackStatus = publicInvoiceCache[id]?.paystack || state.paystack || {};
+      if (!paystackStatus.configured) {
+        showToast("Paystack secret key not set for this business.");
+        return;
+      }
       const endpoint = backendReady ? "/paystack/initialize" : "";
       if (!endpoint) {
         markPaid(id);
-        showToast("Demo payment complete. Add a backend endpoint in Settings for live Paystack.");
+        showToast("Demo payment complete. Start the backend for live Paystack.");
         location.hash = "";
         return;
       }
@@ -1960,14 +2221,15 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             invoiceId: invoice.id,
+            publicId: invoice.publicId || id,
             email: invoice.email,
             amount: Math.round(invoiceTotal(invoice) * 100),
             currency: "NGN",
             metadata: { customer: invoice.customer, invoiceId: invoice.id }
           })
         });
-        if (!response.ok) throw new Error("Payment initialization failed.");
         const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Payment initialization failed.");
         const accessCode = payload.access_code || payload.accessCode || payload.data?.access_code;
         if (!accessCode) throw new Error("No Paystack access code returned.");
         if (!window.PaystackPop) throw new Error("Paystack Popup script is not available.");

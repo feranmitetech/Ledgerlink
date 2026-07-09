@@ -3,14 +3,19 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
+const ROOT_DIR = __dirname;
+const LOADED_ENV_FILES = loadEnvFiles([".env.local", ".env"]);
+
 const PORT = Number(process.env.PORT || 8787);
-const PAYSTACK_SECRET_KEY = (process.env.PAYSTACK_SECRET_KEY || "").trim();
+const PLATFORM_PAYSTACK_SECRET_KEY = (process.env.PLATFORM_PAYSTACK_SECRET_KEY || "").trim();
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+const APP_SECRET = (process.env.APP_SECRET || "").trim();
+const BILLING_PRICE_KOBO = Number(process.env.LEDGERLINK_MONTHLY_PRICE_KOBO || 1200000);
+const BILLING_DURATION_DAYS = Number(process.env.LEDGERLINK_BILLING_DAYS || 30);
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const DATABASE_URL = (process.env.DATABASE_URL || "").trim();
 const MONGODB_URI = (process.env.MONGODB_URI || "").trim();
 const MONGODB_DB = process.env.MONGODB_DB || "ledgerlink";
-const ROOT_DIR = __dirname;
 const DATA_DIR = path.join(ROOT_DIR, "data");
 const DB_PATH = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.join(DATA_DIR, "ledgerlink-db.json");
 const SESSION_COOKIE = "ledgerlink_session";
@@ -184,8 +189,14 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const business = getBusinessForUser(db, user);
       business.settings = sanitizeSettings(body.settings || {});
+      const currentInvoices = db.invoices.filter(invoice => invoice.businessId === business.id);
+      const incomingInvoices = Array.isArray(body.invoices) ? body.invoices : [];
+      if (!subscriptionStatus(business).active && incomingInvoices.length > currentInvoices.length) {
+        writeJson(res, 402, { error: "This LedgerLink subscription is inactive. Renew the plan before creating new invoices." });
+        return;
+      }
       db.invoices = db.invoices.filter(invoice => invoice.businessId !== business.id);
-      db.invoices.push(...(Array.isArray(body.invoices) ? body.invoices : []).map(invoice => ({
+      db.invoices.push(...incomingInvoices.map(invoice => ({
         ...sanitizeInvoice(invoice),
         businessId: business.id
       })));
@@ -194,16 +205,100 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/business/paystack" && req.method === "PUT") {
+      const { user, db } = await requireUser(req, res);
+      if (!user) return;
+      const body = await readJson(req);
+      const secretKey = String(body.secretKey || "").trim();
+      if (!/^sk_(test|live)_/i.test(secretKey)) {
+        writeJson(res, 400, { error: "Enter a valid Paystack secret key. It should start with sk_test_ or sk_live_." });
+        return;
+      }
+      const business = getBusinessForUser(db, user);
+      business.paystack = {
+        secretKeyEncrypted: encryptSecret(secretKey),
+        keyLast4: secretKey.slice(-4),
+        mode: secretKey.startsWith("sk_live_") ? "live" : "test",
+        updatedAt: new Date().toISOString()
+      };
+      await writeDb(db);
+      writeJson(res, 200, { paystack: publicPaystackStatus(business) });
+      return;
+    }
+
+    if (url.pathname === "/api/billing/status" && req.method === "GET") {
+      const { user, db } = await requireUser(req, res);
+      if (!user) return;
+      writeJson(res, 200, { billing: subscriptionStatus(getBusinessForUser(db, user)) });
+      return;
+    }
+
+    if (url.pathname === "/api/billing/initialize" && req.method === "POST") {
+      requirePlatformSecret();
+      const { user, db } = await requireUser(req, res);
+      if (!user) return;
+      const business = getBusinessForUser(db, user);
+      const callbackBase = PUBLIC_BASE_URL || `${url.protocol}//${req.headers.host}`;
+      const reference = `LL-SUB-${business.id}-${Date.now()}`;
+      const payload = {
+        email: user.email,
+        amount: BILLING_PRICE_KOBO,
+        currency: "NGN",
+        reference,
+        callback_url: `${callbackBase}/?billing=return`,
+        metadata: {
+          project: "ledgerlink-saas",
+          plan: "monthly",
+          businessId: business.id,
+          userId: user.id,
+          expectedAmount: BILLING_PRICE_KOBO,
+          expectedCurrency: "NGN"
+        }
+      };
+      const paystackResponse = await paystackFetch("transaction/initialize", PLATFORM_PAYSTACK_SECRET_KEY, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      writeJson(res, paystackResponse.status, await paystackResponse.json());
+      return;
+    }
+
+    if (url.pathname === "/api/billing/verify" && req.method === "GET") {
+      requirePlatformSecret();
+      const { user, db } = await requireUser(req, res);
+      if (!user) return;
+      const reference = url.searchParams.get("reference");
+      if (!reference) {
+        writeJson(res, 400, { error: "Missing transaction reference." });
+        return;
+      }
+      const data = await verifyPaystack(reference, PLATFORM_PAYSTACK_SECRET_KEY);
+      if (data.status && data.data?.status === "success") {
+        const result = await markSubscriptionPaidFromTransaction(data.data, user.id);
+        if (!result.ok) {
+          writeJson(res, 422, { error: result.error, paystack: data });
+          return;
+        }
+      }
+      writeJson(res, 200, { ...data, billing: subscriptionStatus(getBusinessForUser(await readDb(), user)) });
+      return;
+    }
+
     const publicInvoice = url.pathname.match(/^\/api\/public\/invoices\/([^/]+)$/);
     if (publicInvoice && req.method === "GET") {
       const db = await readDb();
-      const invoice = db.invoices.find(item => item.id === decodeURIComponent(publicInvoice[1]));
+      const token = decodeURIComponent(publicInvoice[1]);
+      const invoice = db.invoices.find(item => item.publicId === token || item.id === token);
       if (!invoice) {
         writeJson(res, 404, { error: "Invoice not found." });
         return;
       }
       const business = db.businesses.find(item => item.id === invoice.businessId);
-      writeJson(res, 200, { settings: business.settings, invoice: publicInvoicePayload(invoice) });
+      writeJson(res, 200, {
+        settings: business.settings,
+        paystack: { configured: publicPaystackStatus(business).configured },
+        invoice: publicInvoicePayload(invoice)
+      });
       return;
     }
 
@@ -224,18 +319,30 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/paystack/initialize" && req.method === "POST") {
-      requireSecret();
       const body = await readJson(req);
       const db = await readDb();
-      const invoice = db.invoices.find(item => item.id === body.invoiceId);
+      const invoice = db.invoices.find(item =>
+        item.publicId === body.publicId ||
+        item.publicId === body.invoiceId ||
+        item.id === body.invoiceId
+      );
       if (!invoice || !["pending", "overdue"].includes(effectiveStatus(invoice))) {
         writeJson(res, 404, { error: "Payable invoice not found." });
         return;
       }
 
       const business = db.businesses.find(item => item.id === invoice.businessId);
+      if (!subscriptionStatus(business).active) {
+        writeJson(res, 402, { error: "This LedgerLink subscription is inactive. Renew the plan before accepting invoice payments." });
+        return;
+      }
+      const merchantSecret = businessPaystackSecret(business);
+      if (!merchantSecret) {
+        writeJson(res, 400, { error: "This business has not added its Paystack secret key yet." });
+        return;
+      }
       const amount = Math.round(invoiceTotal(invoice, business.settings) * 100);
-      const reference = `${invoice.id}-${Date.now()}`;
+      const reference = `${invoice.publicId || invoice.id}-${Date.now()}`;
       const payload = {
         email: invoice.email,
         amount,
@@ -244,6 +351,7 @@ const server = http.createServer(async (req, res) => {
         metadata: {
           project: "ledgerlink",
           invoiceId: invoice.id,
+          publicId: invoice.publicId,
           businessId: business.id,
           expectedAmount: amount,
           expectedCurrency: "NGN"
@@ -251,12 +359,12 @@ const server = http.createServer(async (req, res) => {
       };
 
       const callbackBase = PUBLIC_BASE_URL || `${url.protocol}//${req.headers.host}`;
-      payload.callback_url = `${callbackBase}/#pay/${encodeURIComponent(invoice.id)}`;
+      payload.callback_url = `${callbackBase}/#pay/${encodeURIComponent(invoice.publicId || invoice.id)}`;
 
       const paystackResponse = await fetch("https://api.paystack.co/transaction/initialize", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          Authorization: `Bearer ${merchantSecret}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify(payload)
@@ -267,13 +375,24 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/paystack/verify" && req.method === "GET") {
-      requireSecret();
       const reference = url.searchParams.get("reference");
       if (!reference) {
         writeJson(res, 400, { error: "Missing transaction reference." });
         return;
       }
-      const data = await verifyPaystack(reference);
+      const db = await readDb();
+      const invoice = findInvoiceByReference(db, reference);
+      if (!invoice) {
+        writeJson(res, 404, { error: "Invoice not found for transaction reference." });
+        return;
+      }
+      const business = db.businesses.find(item => item.id === invoice.businessId);
+      const merchantSecret = businessPaystackSecret(business);
+      if (!merchantSecret) {
+        writeJson(res, 400, { error: "This business has not added its Paystack secret key yet." });
+        return;
+      }
+      const data = await verifyPaystack(reference, merchantSecret);
       if (data.status && data.data?.status === "success") {
         const result = await markInvoicePaidFromTransaction(data.data);
         if (!result.ok) {
@@ -286,16 +405,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/paystack/webhook" && req.method === "POST") {
-      requireSecret();
       const rawBody = await readRaw(req);
-      const signature = crypto.createHmac("sha512", PAYSTACK_SECRET_KEY).update(rawBody).digest("hex");
-      if (signature !== req.headers["x-paystack-signature"]) {
+      const signature = String(req.headers["x-paystack-signature"] || "");
+      const webhookMatch = await matchPaystackWebhookSecret(rawBody, signature);
+      if (!webhookMatch) {
         writeJson(res, 401, { error: "Invalid webhook signature." });
         return;
       }
       const event = JSON.parse(rawBody);
       if (event.event === "charge.success") {
-        const result = await markInvoicePaidFromTransaction(event.data);
+        const result = event.data?.metadata?.project === "ledgerlink-saas"
+          ? await markSubscriptionPaidFromTransaction(event.data)
+          : await markInvoicePaidFromTransaction(event.data);
         if (!result.ok) console.error("Webhook payment rejected:", result.error);
       }
       writeJson(res, 200, { received: true });
@@ -337,7 +458,8 @@ async function startServer() {
   server.listen(PORT, () => {
     console.log(`LedgerLink running at http://localhost:${PORT}`);
     console.log(`Storage: ${storageLabel()}`);
-    if (!PAYSTACK_SECRET_KEY) console.log("Paystack is in demo mode until PAYSTACK_SECRET_KEY is set.");
+    if (LOADED_ENV_FILES.length) console.log(`Loaded env: ${LOADED_ENV_FILES.join(", ")}`);
+    if (!PLATFORM_PAYSTACK_SECRET_KEY) console.log("Platform billing is disabled until PLATFORM_PAYSTACK_SECRET_KEY is set.");
     if (PUBLIC_BASE_URL) console.log(`Public webhook/callback base URL: ${PUBLIC_BASE_URL}`);
   });
 }
@@ -362,7 +484,7 @@ async function ensureDatabase() {
       `insert into ledgerlink_state (id, data)
        values ($1, $2::jsonb)
        on conflict (id) do nothing`,
-      ["app", JSON.stringify(emptyDb({ settings: seedSettings, invoices: seedInvoices }))]
+      ["app", JSON.stringify(emptyDb())]
     );
     await writeDb(await readDb());
     return;
@@ -372,7 +494,7 @@ async function ensureDatabase() {
     const collection = await getMongoCollection();
     await collection.updateOne(
       { _id: "app" },
-      { $setOnInsert: { data: emptyDb({ settings: seedSettings, invoices: seedInvoices }), updatedAt: new Date() } },
+      { $setOnInsert: { data: emptyDb(), updatedAt: new Date() } },
       { upsert: true }
     );
     await writeDb(await readDb());
@@ -382,7 +504,7 @@ async function ensureDatabase() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   if (!fs.existsSync(DB_PATH)) {
-    await writeDb(emptyDb({ settings: seedSettings, invoices: seedInvoices }));
+    await writeDb(emptyDb());
     return;
   }
   await writeDb(await readDb());
@@ -470,7 +592,9 @@ function sanitizeDb(data) {
   db.businesses = db.businesses.map(business => ({
     id: String(business.id || newId("biz")),
     ownerUserId: String(business.ownerUserId || ""),
-    settings: sanitizeSettings(business.settings || {})
+    settings: sanitizeSettings(business.settings || {}),
+    paystack: sanitizePaystack(business.paystack || {}),
+    subscription: sanitizeSubscription(business.subscription || {})
   }));
   db.invoices = db.invoices.map(invoice => sanitizeInvoice(invoice));
   return db;
@@ -478,7 +602,7 @@ function sanitizeDb(data) {
 
 function claimInitialState(db) {
   if (db.orphanState) return db.orphanState;
-  return { settings: seedSettings, invoices: seedInvoices };
+  return { settings: seedSettings, invoices: [] };
 }
 
 function createUser(name, email, password) {
@@ -543,7 +667,13 @@ async function requireUser(req, res) {
 function getBusinessForUser(db, user) {
   let business = db.businesses.find(item => item.ownerUserId === user.id);
   if (!business) {
-    business = { id: newId("biz"), ownerUserId: user.id, settings: sanitizeSettings({ ...seedSettings, ownerEmail: user.email }) };
+    business = {
+      id: newId("biz"),
+      ownerUserId: user.id,
+      settings: sanitizeSettings({ ...seedSettings, ownerEmail: user.email }),
+      paystack: {},
+      subscription: {}
+    };
     db.businesses.push(business);
   }
   return business;
@@ -553,6 +683,8 @@ function getStateForUser(db, user) {
   const business = getBusinessForUser(db, user);
   return {
     settings: business.settings,
+    paystack: publicPaystackStatus(business),
+    billing: subscriptionStatus(business),
     invoices: db.invoices.filter(invoice => invoice.businessId === business.id).map(({ businessId, ...invoice }) => invoice)
   };
 }
@@ -572,9 +704,52 @@ function sanitizeSettings(settings) {
   return clean;
 }
 
+function sanitizePaystack(paystack) {
+  return {
+    secretKeyEncrypted: typeof paystack.secretKeyEncrypted === "string" ? paystack.secretKeyEncrypted : "",
+    keyLast4: typeof paystack.keyLast4 === "string" ? paystack.keyLast4 : "",
+    mode: paystack.mode === "live" ? "live" : paystack.mode === "test" ? "test" : "",
+    updatedAt: paystack.updatedAt || ""
+  };
+}
+
+function sanitizeSubscription(subscription) {
+  return {
+    status: subscription.status === "active" ? "active" : "inactive",
+    expiresAt: subscription.expiresAt || "",
+    paystackReference: subscription.paystackReference || "",
+    updatedAt: subscription.updatedAt || ""
+  };
+}
+
+function publicPaystackStatus(business) {
+  const paystack = sanitizePaystack(business.paystack || {});
+  return {
+    configured: Boolean(paystack.secretKeyEncrypted),
+    keyLast4: paystack.keyLast4,
+    mode: paystack.mode,
+    updatedAt: paystack.updatedAt
+  };
+}
+
+function subscriptionStatus(business) {
+  const subscription = sanitizeSubscription(business?.subscription || {});
+  const expiresAt = subscription.expiresAt ? new Date(subscription.expiresAt) : null;
+  const active = subscription.status === "active" && expiresAt && expiresAt > new Date();
+  return {
+    active: Boolean(active),
+    status: active ? "active" : "inactive",
+    priceKobo: BILLING_PRICE_KOBO,
+    priceNaira: BILLING_PRICE_KOBO / 100,
+    expiresAt: subscription.expiresAt || "",
+    daysLeft: active ? Math.ceil((expiresAt - new Date()) / 86400000) : 0
+  };
+}
+
 function sanitizeInvoice(invoice) {
   return {
     id: String(invoice.id || ""),
+    publicId: String(invoice.publicId || newId("inv")),
     businessId: invoice.businessId ? String(invoice.businessId) : undefined,
     customer: String(invoice.customer || ""),
     email: String(invoice.email || ""),
@@ -615,17 +790,33 @@ function serveStatic(urlPath, res) {
   fs.createReadStream(filePath).pipe(res);
 }
 
-async function verifyPaystack(reference) {
-  const paystackResponse = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
-    headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` }
+async function paystackFetch(pathname, secretKey, options = {}) {
+  return fetch(`https://api.paystack.co/${pathname.replace(/^\/+/, "")}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
   });
+}
+
+async function verifyPaystack(reference, secretKey) {
+  const paystackResponse = await paystackFetch(`transaction/verify/${encodeURIComponent(reference)}`, secretKey);
   return paystackResponse.json();
+}
+
+function findInvoiceByReference(db, reference) {
+  const match = String(reference || "").match(/^(.+)-\d{10,}$/);
+  const invoiceId = match ? match[1] : "";
+  return db.invoices.find(item => item.publicId === invoiceId || item.id === invoiceId);
 }
 
 async function markInvoicePaidFromTransaction(transaction) {
   const invoiceId = transaction?.metadata?.invoiceId;
+  const publicId = transaction?.metadata?.publicId;
   const db = await readDb();
-  const invoice = db.invoices.find(item => item.id === invoiceId);
+  const invoice = db.invoices.find(item => (publicId && item.publicId === publicId) || (item.id === invoiceId && item.businessId === transaction?.metadata?.businessId));
   if (!invoice) return { ok: false, error: "Invoice not found for transaction." };
   const business = db.businesses.find(item => item.id === invoice.businessId);
   const expectedAmount = Math.round(invoiceTotal(invoice, business.settings) * 100);
@@ -642,9 +833,97 @@ async function markInvoicePaidFromTransaction(transaction) {
   return { ok: true };
 }
 
+async function markSubscriptionPaidFromTransaction(transaction, expectedUserId = "") {
+  const metadata = transaction?.metadata || {};
+  const db = await readDb();
+  const business = db.businesses.find(item => item.id === metadata.businessId);
+  if (!business) return { ok: false, error: "Business not found for subscription payment." };
+  if (expectedUserId && business.ownerUserId !== expectedUserId) {
+    return { ok: false, error: "Subscription payment does not belong to this account." };
+  }
+  if (metadata.project !== "ledgerlink-saas") return { ok: false, error: "Unexpected billing project metadata." };
+  if (transaction.status !== "success") return { ok: false, error: "Subscription transaction was not successful." };
+  if (transaction.currency !== "NGN") return { ok: false, error: "Unexpected subscription currency." };
+  if (Number(transaction.amount) !== BILLING_PRICE_KOBO) return { ok: false, error: "Subscription amount does not match the LedgerLink plan." };
+
+  const currentExpiry = business.subscription?.expiresAt ? new Date(business.subscription.expiresAt) : null;
+  const start = currentExpiry && currentExpiry > new Date() ? currentExpiry : new Date();
+  const expiresAt = new Date(start.getTime() + BILLING_DURATION_DAYS * 86400000).toISOString();
+  business.subscription = {
+    status: "active",
+    expiresAt,
+    paystackReference: transaction.reference,
+    updatedAt: new Date().toISOString()
+  };
+  await writeDb(db);
+  return { ok: true, expiresAt };
+}
+
+function businessPaystackSecret(business) {
+  const encrypted = business?.paystack?.secretKeyEncrypted;
+  return encrypted ? decryptSecret(encrypted) : "";
+}
+
+function requireAppSecret() {
+  if (!APP_SECRET || APP_SECRET.length < 24) {
+    const error = new Error("APP_SECRET is required before storing Paystack keys. Set a long random APP_SECRET in Render.");
+    error.statusCode = 500;
+    throw error;
+  }
+}
+
+function encryptionKey() {
+  requireAppSecret();
+  return crypto.createHash("sha256").update(APP_SECRET).digest();
+}
+
+function encryptSecret(value) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(String(value), "utf8"), cipher.final()]);
+  return [
+    iv.toString("base64url"),
+    cipher.getAuthTag().toString("base64url"),
+    encrypted.toString("base64url")
+  ].join(".");
+}
+
+function decryptSecret(value) {
+  const [ivRaw, tagRaw, encryptedRaw] = String(value || "").split(".");
+  if (!ivRaw || !tagRaw || !encryptedRaw) return "";
+  const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(ivRaw, "base64url"));
+  decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedRaw, "base64url")),
+    decipher.final()
+  ]).toString("utf8");
+}
+
+async function matchPaystackWebhookSecret(rawBody, signature) {
+  if (!signature) return null;
+  if (PLATFORM_PAYSTACK_SECRET_KEY && paystackSignature(rawBody, PLATFORM_PAYSTACK_SECRET_KEY) === signature) {
+    return { type: "platform" };
+  }
+  const db = await readDb();
+  for (const business of db.businesses) {
+    const secret = businessPaystackSecret(business);
+    if (secret && paystackSignature(rawBody, secret) === signature) {
+      return { type: "merchant", businessId: business.id };
+    }
+  }
+  return null;
+}
+
+function paystackSignature(rawBody, secretKey) {
+  return crypto.createHmac("sha512", secretKey).update(rawBody).digest("hex");
+}
+
 function nextInvoiceId(invoices) {
-  const max = invoices.reduce((num, invoice) => Math.max(num, Number(String(invoice.id).replace(/\D/g, "")) || 1000), 1000);
-  return `INV-${max + 1}`;
+  const max = invoices.reduce((num, invoice) => {
+    const match = String(invoice.id || "").match(/^INV-(\d{1,3})$/i);
+    return Math.max(num, match ? Number(match[1]) : 0);
+  }, 0);
+  return `INV-${String(max + 1).padStart(3, "0")}`;
 }
 
 function invoiceTotal(invoice, settings) {
@@ -701,12 +980,39 @@ function getCookie(req, name) {
   return match ? decodeURIComponent(match.slice(name.length + 1)) : "";
 }
 
-function requireSecret() {
-  if (!PAYSTACK_SECRET_KEY) {
-    const error = new Error("PAYSTACK_SECRET_KEY is not configured.");
+function requirePlatformSecret() {
+  if (!PLATFORM_PAYSTACK_SECRET_KEY) {
+    const error = new Error("PLATFORM_PAYSTACK_SECRET_KEY is not configured.");
     error.statusCode = 500;
     throw error;
   }
+}
+
+function loadEnvFiles(filenames) {
+  const loaded = [];
+  for (const filename of filenames) {
+    const filePath = path.join(__dirname, filename);
+    if (!fs.existsSync(filePath)) continue;
+    const raw = fs.readFileSync(filePath, "utf8");
+    raw.split(/\r?\n/).forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return;
+      const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (!match) return;
+      const [, key, rawValue] = match;
+      if (process.env[key] !== undefined) return;
+      process.env[key] = unquoteEnvValue(rawValue.trim());
+    });
+    loaded.push(filename);
+  }
+  return loaded;
+}
+
+function unquoteEnvValue(value) {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
 function readRaw(req) {

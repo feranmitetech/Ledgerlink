@@ -604,6 +604,38 @@
       font-weight: 700;
     }
 
+    .key-status.enabled {
+      background: #e5f6ee;
+      color: var(--green-dark);
+    }
+
+    .key-status.disabled {
+      background: #f2f5f3;
+      color: var(--muted);
+    }
+
+    .reminder-status-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .reminder-status-card strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .reminder-status-card span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
     .reminder-list {
       display: grid;
       gap: 10px;
@@ -1244,11 +1276,24 @@
         .filter(invoice => effectiveStatus(invoice) !== "paid" && effectiveStatus(invoice) !== "draft")
         .map(invoice => {
           const dueIn = daysBetween(invoice.dueDate);
-          const shouldSend = dueIn <= before || dueIn <= -after;
+          const shouldSend = dueIn >= 0 ? dueIn <= before : Math.abs(dueIn) >= after;
           return { invoice, dueIn, shouldSend };
         })
         .filter(row => row.shouldSend)
         .sort((a, b) => a.dueIn - b.dueIn);
+    }
+
+    function automatedReminderStatus() {
+      const enabled = state.settings.automatedRemindersEnabled === true;
+      const before = Number(state.settings.reminderBeforeDays || 0);
+      const after = Number(state.settings.reminderAfterDays || 0);
+      return {
+        enabled,
+        label: enabled ? "Automated reminders ON" : "Automated reminders OFF",
+        detail: enabled
+          ? `LedgerLink will email unpaid customers from ${before} day${before === 1 ? "" : "s"} before due date and ${after} day${after === 1 ? "" : "s"} after due date.`
+          : "LedgerLink will not send reminder emails automatically. You can still send reminders manually from this page."
+      };
     }
 
     function render() {
@@ -1626,6 +1671,7 @@
     }
 
     function remindersView() {
+      const reminderStatus = automatedReminderStatus();
       return `
         <section class="topbar">
           <div class="title-block">
@@ -1638,7 +1684,16 @@
           </div>
         </section>
         <section class="panel">
-          <div class="panel-body">${reminderList(getReminderQueue())}</div>
+          <div class="panel-body">
+            <div class="reminder-status-card">
+              <div>
+                <strong>${reminderStatus.label}</strong>
+                <span>${reminderStatus.detail}</span>
+              </div>
+              <span class="key-status ${reminderStatus.enabled ? "enabled" : "disabled"}">${reminderStatus.enabled ? "ON" : "OFF"}</span>
+            </div>
+            ${reminderList(getReminderQueue())}
+          </div>
         </section>
       `;
     }
@@ -1667,6 +1722,7 @@
 
     function settingsView() {
       const s = state.settings;
+      const reminderStatus = automatedReminderStatus();
       return `
         <section class="topbar">
           <div class="title-block">
@@ -1731,7 +1787,7 @@
                   </div>
                 </div>
               </div>
-              <label class="full"><input type="checkbox" name="automatedRemindersEnabled" ${s.automatedRemindersEnabled ? "checked" : ""}> Send automated email reminders</label>
+              <label class="full"><input type="checkbox" name="automatedRemindersEnabled" ${s.automatedRemindersEnabled ? "checked" : ""}> Send automated email reminders <span class="key-status ${reminderStatus.enabled ? "enabled" : "disabled"}">${reminderStatus.enabled ? "Currently ON" : "Currently OFF"}</span></label>
               <label>Reminder before due date (days)<input type="number" min="0" name="reminderBeforeDays" value="${escapeAttr(s.reminderBeforeDays)}"></label>
               <label>Reminder after due date (days)<input type="number" min="0" name="reminderAfterDays" value="${escapeAttr(s.reminderAfterDays)}"></label>
               <div class="full actions">

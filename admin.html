@@ -129,10 +129,9 @@
         </section>
         <section class="panel">
           <h2>Automated Reminders</h2>
-          <p>Dry run previews the queue. Live run sends only when the server has `RESEND_API_KEY` and `REMINDER_FROM_EMAIL` configured.</p>
+          <p>Preview the system queue. Actual reminder sending belongs to the scheduled worker and only runs for businesses that enabled automated reminders.</p>
           <div class="actions">
-            <button id="dryRun">Dry run</button>
-            <button id="liveRun">Live run</button>
+            <button id="dryRun">Preview queue</button>
           </div>
           <div id="reminderRuns" class="log" style="margin-top:12px"></div>
         </section>
@@ -157,7 +156,6 @@
     document.querySelector("#refresh").addEventListener("click", loadOverview);
     document.querySelector("#updateSub").addEventListener("click", updateSubscription);
     document.querySelector("#dryRun").addEventListener("click", () => runReminders(true));
-    document.querySelector("#liveRun").addEventListener("click", () => runReminders(false));
 
     async function adminFetch(url, options = {}) {
       const token = tokenInput.value.trim() || localStorage.getItem("ledgerlink.adminToken") || "";

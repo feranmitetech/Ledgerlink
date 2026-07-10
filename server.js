@@ -46,6 +46,7 @@ const seedSettings = {
   brandColor: "#107c55",
   accentColor: "#2f4f9e",
   logoDataUrl: "",
+  automatedRemindersEnabled: false,
   reminderBeforeDays: 2,
   reminderAfterDays: 1,
   vatRate: 7.5
@@ -794,6 +795,7 @@ function sanitizeSettings(settings) {
     brandColor: validColor(settings.brandColor, seedSettings.brandColor),
     accentColor: validColor(settings.accentColor, seedSettings.accentColor),
     logoDataUrl: validLogoDataUrl(settings.logoDataUrl) ? settings.logoDataUrl : "",
+    automatedRemindersEnabled: settings.automatedRemindersEnabled === true || settings.automatedRemindersEnabled === "true" || settings.automatedRemindersEnabled === "on",
     vatRate: Number(settings.vatRate ?? seedSettings.vatRate),
     reminderBeforeDays: Number(settings.reminderBeforeDays ?? seedSettings.reminderBeforeDays),
     reminderAfterDays: Number(settings.reminderAfterDays ?? seedSettings.reminderAfterDays)
@@ -1136,6 +1138,10 @@ async function runAutomatedReminders({ dryRun = false, reason = "manual" } = {})
     run.checked += 1;
     const business = businessesById.get(invoice.businessId);
     if (!business || !subscriptionStatus(business).active) {
+      run.skipped += 1;
+      continue;
+    }
+    if (!business.settings?.automatedRemindersEnabled) {
       run.skipped += 1;
       continue;
     }

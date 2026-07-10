@@ -1023,6 +1023,7 @@
         brandColor: "#107c55",
         accentColor: "#2f4f9e",
         logoDataUrl: "",
+        automatedRemindersEnabled: false,
         reminderBeforeDays: 2,
         reminderAfterDays: 1,
         vatRate: 7.5
@@ -1730,6 +1731,7 @@
                   </div>
                 </div>
               </div>
+              <label class="full"><input type="checkbox" name="automatedRemindersEnabled" ${s.automatedRemindersEnabled ? "checked" : ""}> Send automated email reminders</label>
               <label>Reminder before due date (days)<input type="number" min="0" name="reminderBeforeDays" value="${escapeAttr(s.reminderBeforeDays)}"></label>
               <label>Reminder after due date (days)<input type="number" min="0" name="reminderAfterDays" value="${escapeAttr(s.reminderAfterDays)}"></label>
               <div class="full actions">
@@ -2092,7 +2094,8 @@
       state.settings = {
         ...state.settings,
         ...Object.fromEntries(form.entries()),
-        logoDataUrl: previousLogo
+        logoDataUrl: previousLogo,
+        automatedRemindersEnabled: form.get("automatedRemindersEnabled") === "on"
       };
       state.settings.vatRate = Number(state.settings.vatRate || 0);
       state.settings.reminderBeforeDays = Number(state.settings.reminderBeforeDays || 0);

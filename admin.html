@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LedgerLink Admin</title>
+  <style>
+    :root {
+      --ink: #17201c;
+      --muted: #65736d;
+      --line: #dce5df;
+      --paper: #ffffff;
+      --soft: #f6f8f5;
+      --green: #107c55;
+      --red: #b42318;
+      --amber: #b66a05;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--soft);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+    .topbar, .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 14px 40px rgba(24, 39, 32, 0.07);
+    }
+    .topbar {
+      padding: 18px;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 4px; font-size: 24px; }
+    h2 { font-size: 17px; margin-bottom: 8px; }
+    p { color: var(--muted); line-height: 1.45; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .metric, .panel { padding: 16px; }
+    .metric { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
+    .metric span { color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 7px; font-size: 26px; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.85fr); gap: 16px; align-items: start; }
+    .stack { display: grid; gap: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 11px 9px; border-bottom: 1px solid var(--line); text-align: left; font-size: 13px; vertical-align: top; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    input, select, button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+      background: #fff;
+    }
+    button {
+      cursor: pointer;
+      background: var(--green);
+      border-color: var(--green);
+      color: #fff;
+      font-weight: 700;
+    }
+    button.secondary { background: #fff; color: var(--ink); border-color: var(--line); }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .form-grid { display: grid; grid-template-columns: 1fr 130px 90px auto; gap: 8px; align-items: end; }
+    .status { display: inline-flex; border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 800; }
+    .active { color: #0d5f43; background: #dff5ed; }
+    .inactive { color: var(--red); background: #ffe4df; }
+    .log { display: grid; gap: 8px; max-height: 520px; overflow: auto; }
+    .log-item { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; }
+    .log-item strong { display: block; }
+    .log-item small { color: var(--muted); }
+    .toast {
+      position: fixed; right: 16px; bottom: 16px;
+      background: #10211a; color: #fff; border-radius: 8px; padding: 12px 14px;
+      opacity: 0; transform: translateY(16px); transition: 160ms ease;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    @media (max-width: 900px) {
+      .grid, .layout, .form-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="topbar">
+      <div>
+        <h1>LedgerLink Admin</h1>
+        <p>Subscriptions, billing events, audit logs, and automated reminders.</p>
+      </div>
+      <div class="actions">
+        <input id="adminToken" type="password" placeholder="Admin token">
+        <button id="saveToken">Save token</button>
+        <button class="secondary" id="refresh">Refresh</button>
+      </div>
+    </section>
+    <section class="grid" id="metrics"></section>
+    <section class="layout">
+      <div class="stack">
+        <section class="panel">
+          <h2>Businesses</h2>
+          <div style="overflow:auto">
+            <table>
+              <thead><tr><th>Business</th><th>Owner</th><th>Plan</th><th>Invoices</th><th>Paystack</th></tr></thead>
+              <tbody id="businessRows"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Subscription Support</h2>
+          <div class="form-grid">
+            <input id="subEmail" type="email" placeholder="customer@example.com">
+            <select id="subAction"><option value="activate">Activate</option><option value="deactivate">Deactivate</option></select>
+            <input id="subDays" type="number" min="1" value="30">
+            <button id="updateSub">Apply</button>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Automated Reminders</h2>
+          <p>Dry run previews the queue. Live run sends only when the server has `RESEND_API_KEY` and `REMINDER_FROM_EMAIL` configured.</p>
+          <div class="actions">
+            <button id="dryRun">Dry run</button>
+            <button id="liveRun">Live run</button>
+          </div>
+          <div id="reminderRuns" class="log" style="margin-top:12px"></div>
+        </section>
+      </div>
+      <section class="panel">
+        <h2>Audit Log</h2>
+        <div class="log" id="auditLogs"></div>
+      </section>
+    </section>
+  </main>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const tokenInput = document.querySelector("#adminToken");
+    const toast = document.querySelector("#toast");
+    tokenInput.value = localStorage.getItem("ledgerlink.adminToken") || "";
+
+    document.querySelector("#saveToken").addEventListener("click", () => {
+      localStorage.setItem("ledgerlink.adminToken", tokenInput.value.trim());
+      showToast("Admin token saved.");
+    });
+    document.querySelector("#refresh").addEventListener("click", loadOverview);
+    document.querySelector("#updateSub").addEventListener("click", updateSubscription);
+    document.querySelector("#dryRun").addEventListener("click", () => runReminders(true));
+    document.querySelector("#liveRun").addEventListener("click", () => runReminders(false));
+
+    async function adminFetch(url, options = {}) {
+      const token = tokenInput.value.trim() || localStorage.getItem("ledgerlink.adminToken") || "";
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-token": token,
+          ...(options.headers || {})
+        }
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `Request failed with HTTP ${response.status}`);
+      return payload;
+    }
+
+    async function loadOverview() {
+      try {
+        const data = await adminFetch("/api/admin/overview");
+        renderOverview(data);
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function updateSubscription() {
+      try {
+        const payload = await adminFetch("/api/admin/subscriptions", {
+          method: "POST",
+          body: JSON.stringify({
+            email: document.querySelector("#subEmail").value.trim(),
+            action: document.querySelector("#subAction").value,
+            days: Number(document.querySelector("#subDays").value || 30)
+          })
+        });
+        showToast(`Subscription ${payload.billing.status}.`);
+        loadOverview();
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function runReminders(dryRun) {
+      try {
+        const payload = await adminFetch("/api/admin/reminders/run", {
+          method: "POST",
+          body: JSON.stringify({ dryRun })
+        });
+        showToast(`Reminder run: ${payload.sent} sent, ${payload.queued} queued.`);
+        loadOverview();
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    function renderOverview(data) {
+      document.querySelector("#metrics").innerHTML = [
+        ["Users", data.totals.users],
+        ["Businesses", data.totals.businesses],
+        ["Active Plans", data.totals.activeSubscriptions],
+        ["Invoices", data.totals.invoices]
+      ].map(([label, value]) => `<article class="metric"><span>${label}</span><strong>${value}</strong></article>`).join("");
+
+      document.querySelector("#businessRows").innerHTML = data.businesses.map(item => `
+        <tr>
+          <td><strong>${escapeHtml(item.businessName || "Untitled")}</strong><br><small>${escapeHtml(item.id)}</small></td>
+          <td>${escapeHtml(item.ownerEmail || "")}</td>
+          <td><span class="status ${item.billing.active ? "active" : "inactive"}">${item.billing.active ? "Active" : "Inactive"}</span><br><small>${item.billing.daysLeft || 0} days left</small></td>
+          <td>${item.invoiceCount}<br><small>${item.outstandingCount} outstanding</small></td>
+          <td>${item.paystack.configured ? `${escapeHtml(item.paystack.mode)} ending ${escapeHtml(item.paystack.keyLast4)}` : "Not connected"}</td>
+        </tr>
+      `).join("");
+
+      document.querySelector("#auditLogs").innerHTML = data.auditLogs.map(log => `
+        <article class="log-item">
+          <strong>${escapeHtml(log.event)}</strong>
+          <small>${escapeHtml(log.createdAt)} ${log.actorEmail ? `- ${escapeHtml(log.actorEmail)}` : ""}</small>
+          <p>${escapeHtml(log.message || "")}</p>
+        </article>
+      `).join("") || `<p>No audit logs yet.</p>`;
+
+      document.querySelector("#reminderRuns").innerHTML = data.reminderRuns.map(run => `
+        <article class="log-item">
+          <strong>${run.dryRun ? "Dry run" : "Live run"} - ${escapeHtml(run.reason)}</strong>
+          <small>${escapeHtml(run.startedAt)}</small>
+          <p>Checked ${run.checked}, queued ${run.queued}, sent ${run.sent}, failed ${run.failed}, skipped ${run.skipped}</p>
+        </article>
+      `).join("") || `<p>No reminder runs yet.</p>`;
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove("show"), 2800);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+  </script>
+</body>
+</html>

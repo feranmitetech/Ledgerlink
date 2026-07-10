@@ -11,6 +11,9 @@ const PLATFORM_PAYSTACK_SECRET_KEY = (process.env.PLATFORM_PAYSTACK_SECRET_KEY |
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
 const APP_SECRET = (process.env.APP_SECRET || "").trim();
 const ADMIN_API_TOKEN = (process.env.ADMIN_API_TOKEN || "").trim();
+const RESEND_API_KEY = (process.env.RESEND_API_KEY || "").trim();
+const REMINDER_FROM_EMAIL = (process.env.REMINDER_FROM_EMAIL || "").trim();
+const REMINDER_DAILY_HOUR = Number(process.env.REMINDER_DAILY_HOUR || 8);
 const BILLING_PRICE_KOBO = Number(process.env.LEDGERLINK_MONTHLY_PRICE_KOBO || 1200000);
 const BILLING_DURATION_DAYS = Number(process.env.LEDGERLINK_BILLING_DAYS || 30);
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
@@ -24,6 +27,7 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 let pgPool = null;
 let mongoClient = null;
 const rateLimitBuckets = new Map();
+let lastReminderScheduleKey = "";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -145,12 +149,26 @@ const server = http.createServer(async (req, res) => {
       const invoices = claimed.invoices.map(invoice => ({ ...sanitizeInvoice(invoice), businessId }));
 
       db.users.push(user);
-      db.businesses.push({ id: businessId, ownerUserId: user.id, settings });
+      db.businesses.push({ id: businessId, ownerUserId: user.id, settings, paystack: {}, subscription: {}, billingHistory: [] });
       db.invoices.push(...invoices);
       db.orphanState = null;
+      logAudit(db, {
+        event: "auth.register",
+        actorUserId: user.id,
+        actorEmail: user.email,
+        businessId,
+        message: "Business account registered"
+      });
 
       const session = createSession(user.id);
       db.sessions.push(session);
+      logAudit(db, {
+        event: "auth.login",
+        actorUserId: user.id,
+        actorEmail: user.email,
+        businessId: getBusinessForUser(db, user).id,
+        message: "User signed in"
+      });
       await writeDb(db);
       setSessionCookie(res, session.id);
       writeJson(res, 201, sessionPayload(user, db));
@@ -232,6 +250,13 @@ const server = http.createServer(async (req, res) => {
         mode: secretKey.startsWith("sk_live_") ? "live" : "test",
         updatedAt: new Date().toISOString()
       };
+      logAudit(db, {
+        event: "paystack.key_saved",
+        actorUserId: user.id,
+        actorEmail: user.email,
+        businessId: business.id,
+        message: `Business Paystack ${business.paystack.mode} key saved`
+      });
       await writeDb(db);
       writeJson(res, 200, { paystack: publicPaystackStatus(business) });
       return;
@@ -271,7 +296,26 @@ const server = http.createServer(async (req, res) => {
         method: "POST",
         body: JSON.stringify(payload)
       });
-      writeJson(res, paystackResponse.status, await paystackResponse.json());
+      const paystackPayload = await paystackResponse.json();
+      if (paystackResponse.ok && paystackPayload.status) {
+        addBillingEvent(business, {
+          type: "subscription_initialize",
+          status: "pending",
+          amountKobo: BILLING_PRICE_KOBO,
+          currency: "NGN",
+          reference,
+          source: "paystack"
+        });
+        logAudit(db, {
+          event: "billing.initialize",
+          actorUserId: user.id,
+          actorEmail: user.email,
+          businessId: business.id,
+          message: "Subscription payment initialized"
+        });
+        await writeDb(db);
+      }
+      writeJson(res, paystackResponse.status, paystackPayload);
       return;
     }
 
@@ -429,6 +473,24 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/admin/overview" && req.method === "GET") {
+      requireAdmin(req);
+      const db = await readDb();
+      writeJson(res, 200, adminOverview(db));
+      return;
+    }
+
+    if (url.pathname === "/api/admin/reminders/run" && req.method === "POST") {
+      requireAdmin(req);
+      const body = await readJson(req);
+      const result = await runAutomatedReminders({
+        dryRun: body.dryRun !== false,
+        reason: "admin"
+      });
+      writeJson(res, 200, result);
+      return;
+    }
+
     if (url.pathname === "/paystack/webhook" && req.method === "POST") {
       if (!checkRateLimit(req, res, "paystack:webhook", 240, 10 * 60 * 1000)) return;
       const rawBody = await readRaw(req);
@@ -486,8 +548,11 @@ async function startServer() {
     console.log(`Storage: ${storageLabel()}`);
     if (LOADED_ENV_FILES.length) console.log(`Loaded env: ${LOADED_ENV_FILES.join(", ")}`);
     if (!PLATFORM_PAYSTACK_SECRET_KEY) console.log("Platform billing is disabled until PLATFORM_PAYSTACK_SECRET_KEY is set.");
+    if (!reminderEmailReady()) console.log("Automated reminders are in dry-run mode until RESEND_API_KEY and REMINDER_FROM_EMAIL are set.");
     if (PUBLIC_BASE_URL) console.log(`Public webhook/callback base URL: ${PUBLIC_BASE_URL}`);
   });
+  setInterval(runReminderScheduleIfDue, 60 * 60 * 1000).unref();
+  runReminderScheduleIfDue().catch(error => console.error("Reminder schedule failed:", error.message));
 }
 
 function storageLabel() {
@@ -595,7 +660,7 @@ async function getMongoCollection() {
 }
 
 function emptyDb(orphanState = null) {
-  return { schemaVersion: 2, users: [], businesses: [], invoices: [], sessions: [], orphanState };
+  return { schemaVersion: 2, users: [], businesses: [], invoices: [], sessions: [], auditLogs: [], reminderRuns: [], orphanState };
 }
 
 function migrateDb(data) {
@@ -613,6 +678,8 @@ function sanitizeDb(data) {
     businesses: Array.isArray(data.businesses) ? data.businesses : [],
     invoices: Array.isArray(data.invoices) ? data.invoices : [],
     sessions: Array.isArray(data.sessions) ? data.sessions.filter(session => new Date(session.expiresAt) > new Date()) : [],
+    auditLogs: Array.isArray(data.auditLogs) ? data.auditLogs : [],
+    reminderRuns: Array.isArray(data.reminderRuns) ? data.reminderRuns : [],
     orphanState: data.orphanState || null
   };
   db.businesses = db.businesses.map(business => ({
@@ -620,9 +687,12 @@ function sanitizeDb(data) {
     ownerUserId: String(business.ownerUserId || ""),
     settings: sanitizeSettings(business.settings || {}),
     paystack: sanitizePaystack(business.paystack || {}),
-    subscription: sanitizeSubscription(business.subscription || {})
+    subscription: sanitizeSubscription(business.subscription || {}),
+    billingHistory: sanitizeBillingHistory(business.billingHistory || [])
   }));
   db.invoices = db.invoices.map(invoice => sanitizeInvoice(invoice));
+  db.auditLogs = db.auditLogs.map(sanitizeAuditLog).filter(Boolean).slice(-800);
+  db.reminderRuns = db.reminderRuns.map(sanitizeReminderRun).filter(Boolean).slice(-120);
   return db;
 }
 
@@ -698,7 +768,8 @@ function getBusinessForUser(db, user) {
       ownerUserId: user.id,
       settings: sanitizeSettings({ ...seedSettings, ownerEmail: user.email }),
       paystack: {},
-      subscription: {}
+      subscription: {},
+      billingHistory: []
     };
     db.businesses.push(business);
   }
@@ -711,6 +782,7 @@ function getStateForUser(db, user) {
     settings: business.settings,
     paystack: publicPaystackStatus(business),
     billing: subscriptionStatus(business),
+    billingHistory: (business.billingHistory || []).slice(-20).map(publicBillingEvent),
     invoices: db.invoices.filter(invoice => invoice.businessId === business.id).map(({ businessId, ...invoice }) => invoice)
   };
 }
@@ -745,6 +817,67 @@ function sanitizeSubscription(subscription) {
     expiresAt: subscription.expiresAt || "",
     paystackReference: subscription.paystackReference || "",
     updatedAt: subscription.updatedAt || ""
+  };
+}
+
+function sanitizeBillingHistory(history) {
+  return (Array.isArray(history) ? history : []).map(event => ({
+    id: String(event.id || newId("bill")),
+    type: String(event.type || "subscription"),
+    status: String(event.status || ""),
+    amountKobo: Number(event.amountKobo || 0),
+    currency: String(event.currency || "NGN"),
+    reference: String(event.reference || ""),
+    source: String(event.source || ""),
+    periodStart: event.periodStart || "",
+    periodEnd: event.periodEnd || "",
+    createdAt: event.createdAt || new Date().toISOString()
+  })).slice(-200);
+}
+
+function publicBillingEvent(event) {
+  return {
+    id: event.id,
+    type: event.type,
+    status: event.status,
+    amountKobo: event.amountKobo,
+    currency: event.currency,
+    reference: event.reference,
+    source: event.source,
+    periodStart: event.periodStart,
+    periodEnd: event.periodEnd,
+    createdAt: event.createdAt
+  };
+}
+
+function sanitizeAuditLog(log) {
+  if (!log || !log.event) return null;
+  return {
+    id: String(log.id || newId("aud")),
+    event: String(log.event || ""),
+    actorUserId: String(log.actorUserId || ""),
+    actorEmail: String(log.actorEmail || ""),
+    businessId: String(log.businessId || ""),
+    invoiceId: String(log.invoiceId || ""),
+    message: String(log.message || ""),
+    metadata: log.metadata && typeof log.metadata === "object" ? log.metadata : {},
+    createdAt: log.createdAt || new Date().toISOString()
+  };
+}
+
+function sanitizeReminderRun(run) {
+  if (!run || !run.startedAt) return null;
+  return {
+    id: String(run.id || newId("rrun")),
+    reason: String(run.reason || ""),
+    dryRun: Boolean(run.dryRun),
+    checked: Number(run.checked || 0),
+    queued: Number(run.queued || 0),
+    sent: Number(run.sent || 0),
+    failed: Number(run.failed || 0),
+    skipped: Number(run.skipped || 0),
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt || ""
   };
 }
 
@@ -855,6 +988,13 @@ async function markInvoicePaidFromTransaction(transaction) {
   invoice.status = "paid";
   invoice.paidAt = String(transaction.paid_at || new Date().toISOString()).slice(0, 10);
   invoice.paystackReference = transaction.reference;
+  logAudit(db, {
+    event: "invoice.paid",
+    businessId: invoice.businessId,
+    invoiceId: invoice.id,
+    message: `Invoice ${invoice.id} marked paid from Paystack`,
+    metadata: { reference: transaction.reference }
+  });
   await writeDb(db);
   return { ok: true };
 }
@@ -871,16 +1011,40 @@ async function markSubscriptionPaidFromTransaction(transaction, expectedUserId =
   if (transaction.status !== "success") return { ok: false, error: "Subscription transaction was not successful." };
   if (transaction.currency !== "NGN") return { ok: false, error: "Unexpected subscription currency." };
   if (Number(transaction.amount) !== BILLING_PRICE_KOBO) return { ok: false, error: "Subscription amount does not match the LedgerLink plan." };
+  const existingPaidEvent = (business.billingHistory || []).find(event =>
+    event.reference === transaction.reference && event.type === "subscription_payment" && event.status === "paid"
+  );
+  if (existingPaidEvent) {
+    return { ok: true, expiresAt: business.subscription?.expiresAt || existingPaidEvent.periodEnd || "", duplicate: true };
+  }
 
   const currentExpiry = business.subscription?.expiresAt ? new Date(business.subscription.expiresAt) : null;
   const start = currentExpiry && currentExpiry > new Date() ? currentExpiry : new Date();
   const expiresAt = new Date(start.getTime() + BILLING_DURATION_DAYS * 86400000).toISOString();
+  const periodStart = start.toISOString();
   business.subscription = {
     status: "active",
     expiresAt,
     paystackReference: transaction.reference,
     updatedAt: new Date().toISOString()
   };
+  addBillingEvent(business, {
+    type: "subscription_payment",
+    status: "paid",
+    amountKobo: Number(transaction.amount || BILLING_PRICE_KOBO),
+    currency: String(transaction.currency || "NGN"),
+    reference: transaction.reference,
+    source: "paystack",
+    periodStart,
+    periodEnd: expiresAt
+  });
+  logAudit(db, {
+    event: "billing.paid",
+    actorUserId: business.ownerUserId,
+    businessId: business.id,
+    message: "Subscription payment verified",
+    metadata: { reference: transaction.reference, expiresAt }
+  });
   await writeDb(db);
   return { ok: true, expiresAt };
 }
@@ -914,16 +1078,233 @@ async function setSubscriptionByAdmin(body) {
       paystackReference: "manual-admin-deactivate",
       updatedAt: new Date().toISOString()
     };
+    addBillingEvent(business, {
+      type: "admin_deactivate",
+      status: "inactive",
+      reference: "manual-admin-deactivate",
+      source: "admin"
+    });
   } else {
+    const periodStart = new Date().toISOString();
+    const periodEnd = new Date(Date.now() + Math.max(1, days) * 86400000).toISOString();
     business.subscription = {
       status: "active",
-      expiresAt: new Date(Date.now() + Math.max(1, days) * 86400000).toISOString(),
+      expiresAt: periodEnd,
       paystackReference: "manual-admin-activate",
       updatedAt: new Date().toISOString()
     };
+    addBillingEvent(business, {
+      type: "admin_activate",
+      status: "active",
+      reference: "manual-admin-activate",
+      source: "admin",
+      periodStart,
+      periodEnd
+    });
   }
+  logAudit(db, {
+    event: `admin.subscription_${action}`,
+    actorEmail: "admin",
+    businessId: business.id,
+    message: `Subscription ${action}d by admin`,
+    metadata: { email, days: action === "activate" ? Math.max(1, days) : 0 }
+  });
   await writeDb(db);
   return { ok: true, email, billing: subscriptionStatus(business) };
+}
+
+async function runAutomatedReminders({ dryRun = false, reason = "manual" } = {}) {
+  const startedAt = new Date().toISOString();
+  const db = await readDb();
+  const run = {
+    id: newId("rrun"),
+    reason,
+    dryRun: Boolean(dryRun || !reminderEmailReady()),
+    checked: 0,
+    queued: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    startedAt,
+    finishedAt: ""
+  };
+  const businessesById = new Map(db.businesses.map(business => [business.id, business]));
+  const usersById = new Map(db.users.map(user => [user.id, user]));
+  const todayKey = new Date().toISOString().slice(0, 10);
+
+  for (const invoice of db.invoices) {
+    run.checked += 1;
+    const business = businessesById.get(invoice.businessId);
+    if (!business || !subscriptionStatus(business).active) {
+      run.skipped += 1;
+      continue;
+    }
+    if (!invoice.email || !["pending", "overdue"].includes(effectiveStatus(invoice))) {
+      run.skipped += 1;
+      continue;
+    }
+    const dueIn = daysUntil(invoice.dueDate);
+    const before = Number(business.settings?.reminderBeforeDays || 0);
+    const after = Number(business.settings?.reminderAfterDays || 0);
+    const shouldSend = dueIn >= 0 ? dueIn <= before : Math.abs(dueIn) >= after;
+    if (!shouldSend || reminderAlreadySentToday(invoice, todayKey)) {
+      run.skipped += 1;
+      continue;
+    }
+
+    run.queued += 1;
+    const owner = usersById.get(business.ownerUserId);
+    const message = reminderMessageForInvoice(invoice, business);
+    if (run.dryRun) continue;
+
+    try {
+      await sendReminderEmail({
+        to: invoice.email,
+        replyTo: business.settings?.ownerEmail || owner?.email || "",
+        subject: `Payment reminder for ${invoice.id}`,
+        html: reminderHtml({ invoice, business, message }),
+        text: message
+      });
+      invoice.reminders = Array.isArray(invoice.reminders) ? invoice.reminders : [];
+      invoice.reminders.push({ date: todayKey, channel: "Auto Email", at: new Date().toISOString() });
+      logAudit(db, {
+        event: "reminder.sent",
+        businessId: business.id,
+        invoiceId: invoice.id,
+        message: `Automated reminder sent for ${invoice.id}`
+      });
+      run.sent += 1;
+    } catch (error) {
+      logAudit(db, {
+        event: "reminder.failed",
+        businessId: business.id,
+        invoiceId: invoice.id,
+        message: error.message
+      });
+      run.failed += 1;
+    }
+  }
+
+  run.finishedAt = new Date().toISOString();
+  db.reminderRuns = [...(db.reminderRuns || []), run].slice(-120);
+  await writeDb(db);
+  return { ...run, providerConfigured: reminderEmailReady() };
+}
+
+function reminderEmailReady() {
+  return Boolean(RESEND_API_KEY && REMINDER_FROM_EMAIL);
+}
+
+async function sendReminderEmail({ to, replyTo, subject, html, text }) {
+  if (!reminderEmailReady()) throw new Error("Reminder email provider is not configured.");
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: REMINDER_FROM_EMAIL,
+      to: [to],
+      reply_to: replyTo || undefined,
+      subject,
+      html,
+      text
+    })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.message || `Reminder email failed with HTTP ${response.status}.`);
+  }
+  return response.json();
+}
+
+function reminderMessageForInvoice(invoice, business) {
+  const total = formatMoneyPlain(invoiceTotal(invoice, business.settings));
+  const due = new Date(invoice.dueDate + "T00:00:00").toLocaleDateString("en-NG", { day: "2-digit", month: "short", year: "numeric" });
+  const url = `${PUBLIC_BASE_URL || ""}/#pay/${encodeURIComponent(invoice.publicId || invoice.id)}`;
+  if (effectiveStatus(invoice) === "overdue") {
+    return `Hello ${invoice.customer}, this is a friendly reminder that invoice ${invoice.id} for ${total} was due on ${due}. You can review and pay here: ${url}`;
+  }
+  return `Hello ${invoice.customer}, invoice ${invoice.id} for ${total} is due on ${due}. You can review and pay here: ${url}`;
+}
+
+function reminderHtml({ invoice, business, message }) {
+  return `
+    <div style="font-family:Arial,sans-serif;line-height:1.55;color:#17201c">
+      <h2 style="margin:0 0 12px">${escapeHtmlServer(business.settings?.businessName || "LedgerLink")}</h2>
+      <p>${escapeHtmlServer(message)}</p>
+      <p><a href="${PUBLIC_BASE_URL || ""}/#pay/${encodeURIComponent(invoice.publicId || invoice.id)}">View invoice</a></p>
+    </div>
+  `;
+}
+
+function reminderAlreadySentToday(invoice, todayKey) {
+  return (Array.isArray(invoice.reminders) ? invoice.reminders : []).some(reminder =>
+    reminder.channel === "Auto Email" && String(reminder.date || reminder.at || "").slice(0, 10) === todayKey
+  );
+}
+
+function daysUntil(dateValue) {
+  const target = new Date(String(dateValue).slice(0, 10) + "T00:00:00");
+  const start = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00");
+  return Math.round((target - start) / 86400000);
+}
+
+function addBillingEvent(business, event) {
+  business.billingHistory = sanitizeBillingHistory([
+    ...(business.billingHistory || []),
+    {
+      id: newId("bill"),
+      createdAt: new Date().toISOString(),
+      currency: "NGN",
+      amountKobo: 0,
+      ...event
+    }
+  ]);
+}
+
+function logAudit(db, event) {
+  db.auditLogs = [
+    ...(Array.isArray(db.auditLogs) ? db.auditLogs : []),
+    {
+      id: newId("aud"),
+      createdAt: new Date().toISOString(),
+      ...event
+    }
+  ].slice(-800);
+}
+
+function adminOverview(db) {
+  const usersById = new Map(db.users.map(user => [user.id, user]));
+  const businesses = db.businesses.map(business => {
+    const user = usersById.get(business.ownerUserId);
+    const invoices = db.invoices.filter(invoice => invoice.businessId === business.id);
+    const billing = subscriptionStatus(business);
+    return {
+      id: business.id,
+      businessName: business.settings?.businessName || "",
+      ownerEmail: user?.email || "",
+      ownerName: user?.name || "",
+      billing,
+      paystack: publicPaystackStatus(business),
+      invoiceCount: invoices.length,
+      outstandingCount: invoices.filter(invoice => ["pending", "overdue"].includes(effectiveStatus(invoice))).length,
+      billingHistory: (business.billingHistory || []).slice(-8).map(publicBillingEvent)
+    };
+  });
+  return {
+    generatedAt: new Date().toISOString(),
+    totals: {
+      users: db.users.length,
+      businesses: db.businesses.length,
+      activeSubscriptions: businesses.filter(item => item.billing.active).length,
+      invoices: db.invoices.length
+    },
+    businesses,
+    auditLogs: (db.auditLogs || []).slice(-80).reverse(),
+    reminderRuns: (db.reminderRuns || []).slice(-20).reverse()
+  };
 }
 
 function businessPaystackSecret(business) {
@@ -1023,6 +1404,33 @@ function dateOffset(days) {
   const date = new Date();
   date.setDate(date.getDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+async function runReminderScheduleIfDue() {
+  const now = new Date();
+  if (now.getHours() !== REMINDER_DAILY_HOUR) return;
+  const scheduleKey = now.toISOString().slice(0, 10);
+  if (lastReminderScheduleKey === scheduleKey) return;
+  lastReminderScheduleKey = scheduleKey;
+  const result = await runAutomatedReminders({ dryRun: !reminderEmailReady(), reason: "schedule" });
+  console.log(`Reminder run: checked=${result.checked} queued=${result.queued} sent=${result.sent} failed=${result.failed} dryRun=${result.dryRun}`);
+}
+
+function formatMoneyPlain(value) {
+  return new Intl.NumberFormat("en-NG", {
+    style: "currency",
+    currency: "NGN",
+    maximumFractionDigits: 0
+  }).format(Number(value || 0));
+}
+
+function escapeHtmlServer(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function setSecurityHeaders(res) {

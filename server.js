@@ -1560,8 +1560,15 @@ function allowedReminderChannels(business, billing = null) {
 }
 
 function recipientForChannel(invoice, channel) {
-  if (channel === "email") return Boolean(invoice.email);
+  if (channel === "email") return isDeliverableEmail(invoice.email);
   return false;
+}
+
+function isDeliverableEmail(email) {
+  const normalized = normalizeEmail(email);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return false;
+  const domain = normalized.split("@").pop();
+  return !["example.com", "example.net", "example.org"].includes(domain) && !domain.endsWith(".test") && !domain.endsWith(".invalid");
 }
 
 function reminderLimitReached(billing, channel) {

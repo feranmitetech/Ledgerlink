@@ -16,6 +16,7 @@ const TERMII_BASE_URL = (process.env.TERMII_BASE_URL || "").replace(/\/$/, "");
 const TERMII_EMAIL_CONFIGURATION_ID = (process.env.TERMII_EMAIL_CONFIGURATION_ID || "").trim();
 const TERMII_EMAIL_TEMPLATE_ID = (process.env.TERMII_EMAIL_TEMPLATE_ID || "").trim();
 const REMINDER_DAILY_HOUR = Number(process.env.REMINDER_DAILY_HOUR || 8);
+const REMINDER_TIME_ZONE = process.env.REMINDER_TIME_ZONE || "Africa/Lagos";
 const BILLING_DURATION_DAYS = Number(process.env.LEDGERLINK_BILLING_DAYS || 30);
 const BILLING_PLANS = buildBillingPlans();
 const BILLING_ADDONS = buildBillingAddons();
@@ -1548,7 +1549,7 @@ function reminderProviderReady() {
 }
 
 function reminderChannelReady(channel) {
-  if (!TERMII_API_KEY || !TERMII_BASE_URL) return false;
+  if (!TERMII_API_KEY || !TERMII_BASE_URL || !PUBLIC_BASE_URL) return false;
   if (channel === "email") return Boolean(TERMII_EMAIL_CONFIGURATION_ID && TERMII_EMAIL_TEMPLATE_ID);
   return false;
 }
@@ -1828,12 +1829,36 @@ function dateOffset(days) {
 
 async function runReminderScheduleIfDue() {
   const now = new Date();
-  if (now.getHours() !== REMINDER_DAILY_HOUR) return;
-  const scheduleKey = now.toISOString().slice(0, 10);
+  const schedule = reminderScheduleParts(now);
+  if (schedule.hour !== REMINDER_DAILY_HOUR) return;
+  const scheduleKey = schedule.dateKey;
   if (lastReminderScheduleKey === scheduleKey) return;
   lastReminderScheduleKey = scheduleKey;
   const result = await runAutomatedReminders({ dryRun: !reminderProviderReady(), reason: "schedule" });
   console.log(`Reminder run: checked=${result.checked} queued=${result.queued} sent=${result.sent} failed=${result.failed} dryRun=${result.dryRun}`);
+}
+
+function reminderScheduleParts(date) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: REMINDER_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(date);
+    const value = name => parts.find(part => part.type === name)?.value || "";
+    return {
+      hour: Number(value("hour")),
+      dateKey: `${value("year")}-${value("month")}-${value("day")}`
+    };
+  } catch {
+    return {
+      hour: date.getUTCHours(),
+      dateKey: date.toISOString().slice(0, 10)
+    };
+  }
 }
 
 function formatMoneyPlain(value) {

@@ -77,10 +77,11 @@ LEDGERLINK_EMAIL_PLAN_PRICE_KOBO=1200000
 LEDGERLINK_EMAIL_PLAN_EMAIL_LIMIT=300
 LEDGERLINK_EXTRA_EMAIL_500_PRICE_KOBO=300000
 TERMII_API_KEY=your_termii_api_key
-TERMII_BASE_URL=https://your-termii-base-url.example
+TERMII_BASE_URL=https://v3.api.termii.com
 TERMII_EMAIL_CONFIGURATION_ID=your_email_configuration_id
 TERMII_EMAIL_TEMPLATE_ID=your_email_template_id
 REMINDER_DAILY_HOUR=8
+REMINDER_TIME_ZONE=Africa/Lagos
 PUBLIC_BASE_URL=https://your-ledgerlink-domain.onrender.com
 ```
 
@@ -191,7 +192,6 @@ amount
 due_date
 payment_link
 message
-reply_to
 ```
 
 Suggested email subject:

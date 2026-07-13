@@ -1592,10 +1592,7 @@ async function sendTermiiEmailReminder({ invoice, business, owner, message }) {
       subject: `Payment reminder from ${variables.business_name} - ${invoice.id}`,
       email_configuration_id: TERMII_EMAIL_CONFIGURATION_ID,
       template_id: TERMII_EMAIL_TEMPLATE_ID,
-      variables: {
-        ...variables,
-        reply_to: business.settings?.ownerEmail || owner?.email || ""
-      }
+      variables
     })
   });
   if (!response.ok) {
@@ -1607,7 +1604,7 @@ async function sendTermiiEmailReminder({ invoice, business, owner, message }) {
       payload = {};
     }
     const details = payload.message || payload.error || text || response.statusText;
-    throw new Error(`Termii email reminder failed with HTTP ${response.status}: ${details}`);
+    throw new Error(`Termii email reminder failed with HTTP ${response.status} at ${TERMII_BASE_URL}/api/templates/send-email: ${details}`);
   }
   return response.json();
 }

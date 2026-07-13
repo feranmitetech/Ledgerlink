@@ -1911,7 +1911,6 @@
               </div>
               <label class="full"><input type="checkbox" name="automatedRemindersEnabled" ${s.automatedRemindersEnabled ? "checked" : ""}> Send automated reminders <span class="key-status ${reminderStatus.enabled ? "enabled" : "disabled"}">${reminderStatus.enabled ? "Currently ON" : "Currently OFF"}</span></label>
               <label><input type="checkbox" name="reminderEmailChannel" ${s.automatedReminderChannels?.email !== false ? "checked" : ""}> Email delivery</label>
-              <div class="empty">WhatsApp reminders are manual to avoid fixed monthly WhatsApp automation costs.</div>
               <label>Reminder before due date (days)<input type="number" min="0" name="reminderBeforeDays" value="${escapeAttr(s.reminderBeforeDays)}"></label>
               <label>Reminder after due date (days)<input type="number" min="0" name="reminderAfterDays" value="${escapeAttr(s.reminderAfterDays)}"></label>
               <div class="full actions">

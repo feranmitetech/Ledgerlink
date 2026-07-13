@@ -1067,6 +1067,11 @@ function sanitizeReminderRun(run) {
     sent: Number(run.sent || 0),
     failed: Number(run.failed || 0),
     skipped: Number(run.skipped || 0),
+    failures: (Array.isArray(run.failures) ? run.failures : []).slice(0, 20).map(failure => ({
+      invoiceId: String(failure.invoiceId || ""),
+      channel: String(failure.channel || ""),
+      message: String(failure.message || "")
+    })),
     startedAt: run.startedAt,
     finishedAt: run.finishedAt || ""
   };
@@ -1442,6 +1447,7 @@ async function runAutomatedReminders({ dryRun = false, reason = "manual" } = {})
     sent: 0,
     failed: 0,
     skipped: 0,
+    failures: [],
     startedAt,
     finishedAt: ""
   };
@@ -1512,12 +1518,19 @@ async function runAutomatedReminders({ dryRun = false, reason = "manual" } = {})
         });
         run.sent += 1;
       } catch (error) {
+        const failure = {
+          invoiceId: invoice.id,
+          channel,
+          message: error.message
+        };
+        run.failures.push(failure);
+        console.error("Reminder delivery failed:", failure);
         logAudit(db, {
           event: "reminder.failed",
           businessId: business.id,
           invoiceId: invoice.id,
           message: error.message,
-          metadata: { channel }
+          metadata: failure
         });
         run.failed += 1;
       }
@@ -1586,8 +1599,15 @@ async function sendTermiiEmailReminder({ invoice, business, owner, message }) {
     })
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.message || `Termii email reminder failed with HTTP ${response.status}.`);
+    const text = await response.text().catch(() => "");
+    let payload = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = {};
+    }
+    const details = payload.message || payload.error || text || response.statusText;
+    throw new Error(`Termii email reminder failed with HTTP ${response.status}: ${details}`);
   }
   return response.json();
 }

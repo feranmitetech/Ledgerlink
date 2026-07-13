@@ -242,6 +242,7 @@
           <strong>${run.dryRun ? "Dry run" : "Live run"} - ${escapeHtml(run.reason)}</strong>
           <small>${escapeHtml(run.startedAt)}</small>
           <p>Checked ${run.checked}, queued ${run.queued}, sent ${run.sent}, failed ${run.failed}, skipped ${run.skipped}</p>
+          ${(run.failures || []).map(failure => `<p><small>${escapeHtml(failure.invoiceId)}: ${escapeHtml(failure.message)}</small></p>`).join("")}
         </article>
       `).join("") || `<p>No reminder runs yet.</p>`;
     }

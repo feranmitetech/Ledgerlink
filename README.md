@@ -12,7 +12,7 @@ Run the backend and open the app at `http://localhost:8787`. The file-only mode 
 - Invoice creation with VAT and line items
 - Shareable invoice payment pages
 - Paid, pending, overdue, and draft tracking
-- Email, WhatsApp, email-all-due, and copyable reminder messages
+- Automated email reminders, manual WhatsApp reminders, email-all-due, and copyable reminder messages
 - Brand logo, brand color, and accent color customization for invoices
 - CSV export
 - Account registration and login with secure password hashing
@@ -75,17 +75,11 @@ ADMIN_API_TOKEN=use_a_different_long_random_admin_token
 PLATFORM_PAYSTACK_SECRET_KEY=sk_live_your_ledgerlink_billing_key
 LEDGERLINK_EMAIL_PLAN_PRICE_KOBO=1200000
 LEDGERLINK_EMAIL_PLAN_EMAIL_LIMIT=300
-LEDGERLINK_EMAIL_WHATSAPP_PLAN_PRICE_KOBO=2500000
-LEDGERLINK_EMAIL_WHATSAPP_PLAN_EMAIL_LIMIT=300
-LEDGERLINK_EMAIL_WHATSAPP_PLAN_WHATSAPP_LIMIT=100
 LEDGERLINK_EXTRA_EMAIL_500_PRICE_KOBO=300000
-LEDGERLINK_EXTRA_WHATSAPP_100_PRICE_KOBO=500000
 TERMII_API_KEY=your_termii_api_key
 TERMII_BASE_URL=https://your-termii-base-url.example
 TERMII_EMAIL_CONFIGURATION_ID=your_email_configuration_id
 TERMII_EMAIL_TEMPLATE_ID=your_email_template_id
-TERMII_WHATSAPP_DEVICE_ID=your_whatsapp_device_id
-TERMII_WHATSAPP_TEMPLATE_ID=your_whatsapp_template_id
 REMINDER_DAILY_HOUR=8
 PUBLIC_BASE_URL=https://your-ledgerlink-domain.onrender.com
 ```
@@ -177,11 +171,11 @@ https://your-public-url.example/paystack/webhook
 
 The email buttons open Gmail compose in a new browser tab because many Windows machines do not have a default `mailto:` email app configured. If the browser blocks the popup, the app falls back to a standard `mailto:` link.
 
-Reminder timing is business-controlled. Each business must enable automated reminders in Settings, then choose Email and, when their plan allows it, WhatsApp delivery. LedgerLink builds a queue from that business's invoice due dates using the **before due date** and **after due date** settings.
+Reminder timing is business-controlled. Each business must enable automated reminders in Settings. LedgerLink builds an email reminder queue from that business's invoice due dates using the **before due date** and **after due date** settings.
 
-Automated delivery uses your LedgerLink Termii account, not business-owned Termii keys. Email uses Termii's templated email endpoint. WhatsApp uses a pre-approved Termii WhatsApp template with six variables: customer name, business name, invoice number, amount, due date, and payment link. Without the Termii env vars, reminder runs stay in dry-run mode.
+Automated delivery uses your LedgerLink Termii account, not business-owned Termii keys. Email uses Termii's templated email endpoint. WhatsApp reminders remain manual through the browser's WhatsApp link so LedgerLink does not incur Termii's fixed monthly WhatsApp automation fee. Without the Termii email env vars, reminder runs stay in dry-run mode.
 
-Plans and add-ons are quota-based. By default, the email plan includes 300 email reminders, the WhatsApp plan costs ₦25,000 and includes 300 email reminders plus 100 WhatsApp reminders, and add-ons add 500 emails for ₦3,000 or 100 WhatsApp reminders for ₦5,000. Add-on credits apply to the current subscription period.
+Plans and add-ons are quota-based. By default, the email plan includes 300 automated email reminders, and add-ons add 500 extra emails for ₦3,000. Add-on credits apply to the current subscription period.
 
 **Email all due** opens one Gmail compose window with due customers in BCC. It is a reminder broadcast, but recipients should not see each other's email addresses.
 
@@ -224,22 +218,7 @@ Pay securely here:
 Powered by LedgerLink.
 ```
 
-For WhatsApp, create/submit an approved Termii template with six variables:
-
-```text
-Hello {{1}}, this is a payment reminder from {{2}} for invoice {{3}} of {{4}}, due on {{5}}. Pay here: {{6}}. Powered by LedgerLink.
-```
-
-LedgerLink sends the WhatsApp variables in this order:
-
-```text
-1 = customer_name
-2 = business_name
-3 = invoice_id
-4 = amount
-5 = due_date
-6 = payment_link
-```
+WhatsApp does not need a Termii template while it remains manual. The app opens WhatsApp with a prefilled reminder message for the business owner to send.
 
 ## Invoice branding
 

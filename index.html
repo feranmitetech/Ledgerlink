@@ -1106,12 +1106,10 @@
       paystack: { configured: false, keyLast4: "", mode: "", updatedAt: "" },
       billing: { active: false, status: "inactive", plan: "email", planName: "Email reminders", priceKobo: 1200000, priceNaira: 12000, baseLimits: { email: 300, whatsapp: 0 }, addOns: { email: 0, whatsapp: 0 }, limits: { email: 300, whatsapp: 0 }, usage: { email: 0, whatsapp: 0 }, daysLeft: 0, expiresAt: "" },
       billingPlans: [
-        { id: "email", name: "Email reminders", description: "Invoice tracking, Paystack collection, and automated email reminders.", priceKobo: 1200000, priceNaira: 12000, emailLimit: 300, whatsappLimit: 0, channels: ["email"] },
-        { id: "email_whatsapp", name: "Email + WhatsApp reminders", description: "Adds automated WhatsApp reminders for customers who prefer chat.", priceKobo: 2500000, priceNaira: 25000, emailLimit: 300, whatsappLimit: 100, channels: ["email", "whatsapp"] }
+        { id: "email", name: "Email reminders", description: "Invoice tracking, Paystack collection, and automated email reminders.", priceKobo: 1200000, priceNaira: 12000, emailLimit: 300, whatsappLimit: 0, channels: ["email"] }
       ],
       billingAddons: [
-        { id: "extra_email_500", name: "Extra 500 emails", description: "Adds 500 automated email reminders for this billing period.", priceKobo: 300000, priceNaira: 3000, emailLimit: 500, whatsappLimit: 0 },
-        { id: "extra_whatsapp_100", name: "Extra 100 WhatsApp", description: "Adds 100 automated WhatsApp reminders for this billing period.", priceKobo: 500000, priceNaira: 5000, emailLimit: 0, whatsappLimit: 100 }
+        { id: "extra_email_500", name: "Extra 500 emails", description: "Adds 500 automated email reminders for this billing period.", priceKobo: 300000, priceNaira: 3000, emailLimit: 500, whatsappLimit: 0 }
       ],
       invoices: [
         {
@@ -1345,15 +1343,11 @@
       const enabled = state.settings.automatedRemindersEnabled === true;
       const before = Number(state.settings.reminderBeforeDays || 0);
       const after = Number(state.settings.reminderAfterDays || 0);
-      const channels = [];
-      if (state.settings.automatedReminderChannels?.email !== false) channels.push("email");
-      if (state.settings.automatedReminderChannels?.whatsapp && Number(state.billing?.limits?.whatsapp || 0) > 0) channels.push("WhatsApp");
-      const channelText = channels.length ? channels.join(" and ") : "no delivery channels";
       return {
         enabled,
         label: enabled ? "Automated reminders ON" : "Automated reminders OFF",
         detail: enabled
-          ? `LedgerLink will send ${channelText} reminders from ${before} day${before === 1 ? "" : "s"} before due date and ${after} day${after === 1 ? "" : "s"} after due date.`
+          ? `LedgerLink will send email reminders from ${before} day${before === 1 ? "" : "s"} before due date and ${after} day${after === 1 ? "" : "s"} after due date. WhatsApp reminders remain manual.`
           : "LedgerLink will not send reminders automatically. You can still send reminders manually from this page."
       };
     }
@@ -1648,7 +1642,7 @@
               <strong>${formatMoney(plan.priceNaira || (plan.priceKobo / 100))}/month</strong>
               <div class="plan-limits">
                 <span>Email reminders: ${Number(plan.emailLimit || 0).toLocaleString()}</span>
-                <span>WhatsApp reminders: ${Number(plan.whatsappLimit || 0).toLocaleString()}</span>
+                <span>Manual WhatsApp reminders stay available.</span>
               </div>
               <button class="btn ${isCurrent ? "" : "primary"}" data-renew-plan="${escapeAttr(plan.id)}" type="button">${isCurrent ? "Renew current plan" : compact ? "Choose" : "Pay and activate"}</button>
             </article>
@@ -1661,10 +1655,10 @@
       const limits = state.billing?.limits || {};
       const usage = state.billing?.usage || {};
       const addOns = state.billing?.addOns || {};
-      const addonText = Number(addOns.email || 0) || Number(addOns.whatsapp || 0)
-        ? ` · Add-ons: Email +${Number(addOns.email || 0).toLocaleString()}, WhatsApp +${Number(addOns.whatsapp || 0).toLocaleString()}`
+      const addonText = Number(addOns.email || 0)
+        ? ` · Add-ons: Email +${Number(addOns.email || 0).toLocaleString()}`
         : "";
-      return `Email ${Number(usage.email || 0).toLocaleString()}/${Number(limits.email || 0).toLocaleString()} · WhatsApp ${Number(usage.whatsapp || 0).toLocaleString()}/${Number(limits.whatsapp || 0).toLocaleString()}${addonText}`;
+      return `Email ${Number(usage.email || 0).toLocaleString()}/${Number(limits.email || 0).toLocaleString()}${addonText}`;
     }
 
     function addonCards() {
@@ -1678,7 +1672,7 @@
             <strong>${formatMoney(addon.priceNaira || (addon.priceKobo / 100))}</strong>
             <div class="plan-limits">
               <span>Email credits: ${Number(addon.emailLimit || 0).toLocaleString()}</span>
-              <span>WhatsApp credits: ${Number(addon.whatsappLimit || 0).toLocaleString()}</span>
+              <span>Manual WhatsApp is not counted.</span>
             </div>
             <button class="btn primary" data-buy-addon="${escapeAttr(addon.id)}" type="button">Buy add-on</button>
           </article>
@@ -1839,7 +1833,6 @@
     function settingsView() {
       const s = state.settings;
       const reminderStatus = automatedReminderStatus();
-      const whatsappAllowed = Boolean((state.billing?.limits?.whatsapp || 0) > 0);
       return `
         <section class="topbar">
           <div class="title-block">
@@ -1918,7 +1911,7 @@
               </div>
               <label class="full"><input type="checkbox" name="automatedRemindersEnabled" ${s.automatedRemindersEnabled ? "checked" : ""}> Send automated reminders <span class="key-status ${reminderStatus.enabled ? "enabled" : "disabled"}">${reminderStatus.enabled ? "Currently ON" : "Currently OFF"}</span></label>
               <label><input type="checkbox" name="reminderEmailChannel" ${s.automatedReminderChannels?.email !== false ? "checked" : ""}> Email delivery</label>
-              <label><input type="checkbox" name="reminderWhatsappChannel" ${s.automatedReminderChannels?.whatsapp ? "checked" : ""} ${whatsappAllowed ? "" : "disabled"}> WhatsApp delivery${whatsappAllowed ? "" : " (upgrade required)"}</label>
+              <div class="empty">WhatsApp reminders are manual to avoid fixed monthly WhatsApp automation costs.</div>
               <label>Reminder before due date (days)<input type="number" min="0" name="reminderBeforeDays" value="${escapeAttr(s.reminderBeforeDays)}"></label>
               <label>Reminder after due date (days)<input type="number" min="0" name="reminderAfterDays" value="${escapeAttr(s.reminderAfterDays)}"></label>
               <div class="full actions">
@@ -2289,7 +2282,7 @@
         automatedRemindersEnabled: form.get("automatedRemindersEnabled") === "on",
         automatedReminderChannels: {
           email: form.get("reminderEmailChannel") === "on",
-          whatsapp: form.get("reminderWhatsappChannel") === "on"
+          whatsapp: false
         }
       };
       state.settings.vatRate = Number(state.settings.vatRate || 0);

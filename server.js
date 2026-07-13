@@ -15,8 +15,6 @@ const TERMII_API_KEY = (process.env.TERMII_API_KEY || "").trim();
 const TERMII_BASE_URL = (process.env.TERMII_BASE_URL || "").replace(/\/$/, "");
 const TERMII_EMAIL_CONFIGURATION_ID = (process.env.TERMII_EMAIL_CONFIGURATION_ID || "").trim();
 const TERMII_EMAIL_TEMPLATE_ID = (process.env.TERMII_EMAIL_TEMPLATE_ID || "").trim();
-const TERMII_WHATSAPP_DEVICE_ID = (process.env.TERMII_WHATSAPP_DEVICE_ID || "").trim();
-const TERMII_WHATSAPP_TEMPLATE_ID = (process.env.TERMII_WHATSAPP_TEMPLATE_ID || "").trim();
 const REMINDER_DAILY_HOUR = Number(process.env.REMINDER_DAILY_HOUR || 8);
 const BILLING_DURATION_DAYS = Number(process.env.LEDGERLINK_BILLING_DAYS || 30);
 const BILLING_PLANS = buildBillingPlans();
@@ -118,15 +116,6 @@ function buildBillingPlans() {
       emailLimit: Number(process.env.LEDGERLINK_EMAIL_PLAN_EMAIL_LIMIT || 300),
       whatsappLimit: 0,
       channels: ["email"]
-    },
-    {
-      id: "email_whatsapp",
-      name: "Email + WhatsApp reminders",
-      description: "Everything in Email reminders, plus automated WhatsApp reminder delivery.",
-      priceKobo: Number(process.env.LEDGERLINK_EMAIL_WHATSAPP_PLAN_PRICE_KOBO || 2500000),
-      emailLimit: Number(process.env.LEDGERLINK_EMAIL_WHATSAPP_PLAN_EMAIL_LIMIT || 300),
-      whatsappLimit: Number(process.env.LEDGERLINK_EMAIL_WHATSAPP_PLAN_WHATSAPP_LIMIT || 100),
-      channels: ["email", "whatsapp"]
     }
   ];
 }
@@ -140,14 +129,6 @@ function buildBillingAddons() {
       priceKobo: Number(process.env.LEDGERLINK_EXTRA_EMAIL_500_PRICE_KOBO || 300000),
       emailLimit: 500,
       whatsappLimit: 0
-    },
-    {
-      id: "extra_whatsapp_100",
-      name: "Extra 100 WhatsApp",
-      description: "Adds 100 automated WhatsApp reminders for the current billing period.",
-      priceKobo: Number(process.env.LEDGERLINK_EXTRA_WHATSAPP_100_PRICE_KOBO || 500000),
-      emailLimit: 0,
-      whatsappLimit: 100
     }
   ];
 }
@@ -736,7 +717,7 @@ async function startServer() {
     console.log(`Storage: ${storageLabel()}`);
     if (LOADED_ENV_FILES.length) console.log(`Loaded env: ${LOADED_ENV_FILES.join(", ")}`);
     if (!PLATFORM_PAYSTACK_SECRET_KEY) console.log("Platform billing is disabled until PLATFORM_PAYSTACK_SECRET_KEY is set.");
-    if (!reminderProviderReady()) console.log("Automated reminders are in dry-run mode until Termii email or WhatsApp settings are configured.");
+    if (!reminderProviderReady()) console.log("Automated reminders are in dry-run mode until Termii email settings are configured.");
     if (PUBLIC_BASE_URL) console.log(`Public webhook/callback base URL: ${PUBLIC_BASE_URL}`);
   });
   setInterval(runReminderScheduleIfDue, 60 * 60 * 1000).unref();
@@ -999,7 +980,7 @@ function sanitizeSettings(settings) {
 function sanitizeReminderChannels(channels = {}) {
   return {
     email: channels.email !== false && channels.email !== "false" && channels.email !== "off",
-    whatsapp: channels.whatsapp === true || channels.whatsapp === "true" || channels.whatsapp === "on"
+    whatsapp: false
   };
 }
 
@@ -1155,7 +1136,6 @@ function notificationUsageForBusiness(db, business, subscription = null) {
       const sentAt = new Date(reminder.at || reminder.date || "");
       if (!Number.isFinite(sentAt.getTime()) || sentAt < period.start || sentAt > period.end) continue;
       if (reminder.channel === "Auto Email") usage.email += 1;
-      if (reminder.channel === "Auto WhatsApp") usage.whatsapp += 1;
     }
   }
   return usage;
@@ -1551,25 +1531,23 @@ async function runAutomatedReminders({ dryRun = false, reason = "manual" } = {})
 }
 
 function reminderProviderReady() {
-  return reminderChannelReady("email") || reminderChannelReady("whatsapp");
+  return reminderChannelReady("email");
 }
 
 function reminderChannelReady(channel) {
   if (!TERMII_API_KEY || !TERMII_BASE_URL) return false;
   if (channel === "email") return Boolean(TERMII_EMAIL_CONFIGURATION_ID && TERMII_EMAIL_TEMPLATE_ID);
-  if (channel === "whatsapp") return Boolean(TERMII_WHATSAPP_DEVICE_ID && TERMII_WHATSAPP_TEMPLATE_ID);
   return false;
 }
 
 function allowedReminderChannels(business, billing = null) {
   const limits = billing?.limits || subscriptionStatus(business).limits || {};
   const channels = sanitizeReminderChannels(business?.settings?.automatedReminderChannels || {});
-  return ["email", "whatsapp"].filter(channel => channels[channel] === true && Number(limits[channel] || 0) > 0);
+  return ["email"].filter(channel => channels[channel] === true && Number(limits[channel] || 0) > 0);
 }
 
 function recipientForChannel(invoice, channel) {
   if (channel === "email") return Boolean(invoice.email);
-  if (channel === "whatsapp") return Boolean(normalizePhoneForTermii(invoice.phone));
   return false;
 }
 
@@ -1580,12 +1558,11 @@ function reminderLimitReached(billing, channel) {
 }
 
 function autoReminderChannelName(channel) {
-  return channel === "whatsapp" ? "Auto WhatsApp" : "Auto Email";
+  return "Auto Email";
 }
 
 async function sendReminderDelivery({ channel, invoice, business, owner, message }) {
   if (!reminderChannelReady(channel)) throw new Error(`Termii ${channel} provider is not configured.`);
-  if (channel === "whatsapp") return sendTermiiWhatsAppReminder({ invoice, business, message });
   return sendTermiiEmailReminder({ invoice, business, owner, message });
 }
 
@@ -1599,7 +1576,7 @@ async function sendTermiiEmailReminder({ invoice, business, owner, message }) {
     body: JSON.stringify({
       api_key: TERMII_API_KEY,
       email: invoice.email,
-      subject: `Payment reminder for ${invoice.id}`,
+      subject: `Payment reminder from ${variables.business_name} - ${invoice.id}`,
       email_configuration_id: TERMII_EMAIL_CONFIGURATION_ID,
       template_id: TERMII_EMAIL_TEMPLATE_ID,
       variables: {
@@ -1611,35 +1588,6 @@ async function sendTermiiEmailReminder({ invoice, business, owner, message }) {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.message || `Termii email reminder failed with HTTP ${response.status}.`);
-  }
-  return response.json();
-}
-
-async function sendTermiiWhatsAppReminder({ invoice, business, message }) {
-  const variables = reminderVariables(invoice, business, message);
-  const response = await fetch(`${TERMII_BASE_URL}/api/send/template`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      api_key: TERMII_API_KEY,
-      phone_number: normalizePhoneForTermii(invoice.phone),
-      device_id: TERMII_WHATSAPP_DEVICE_ID,
-      template_id: TERMII_WHATSAPP_TEMPLATE_ID,
-      data: {
-        "1": variables.customer_name,
-        "2": variables.business_name,
-        "3": variables.invoice_id,
-        "4": variables.amount,
-        "5": variables.due_date,
-        "6": variables.payment_link
-      }
-    })
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.message || `Termii WhatsApp reminder failed with HTTP ${response.status}.`);
   }
   return response.json();
 }

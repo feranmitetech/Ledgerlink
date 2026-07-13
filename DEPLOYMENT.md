@@ -61,8 +61,21 @@ NODE_ENV=production
 APP_SECRET=long_random_secret_at_least_32_chars
 ADMIN_API_TOKEN=different_long_random_admin_token
 PLATFORM_PAYSTACK_SECRET_KEY=sk_live_or_test_platform_billing_key
-LEDGERLINK_MONTHLY_PRICE_KOBO=1200000
 LEDGERLINK_BILLING_DAYS=30
+LEDGERLINK_EMAIL_PLAN_PRICE_KOBO=1200000
+LEDGERLINK_EMAIL_PLAN_EMAIL_LIMIT=300
+LEDGERLINK_EMAIL_WHATSAPP_PLAN_PRICE_KOBO=2500000
+LEDGERLINK_EMAIL_WHATSAPP_PLAN_EMAIL_LIMIT=300
+LEDGERLINK_EMAIL_WHATSAPP_PLAN_WHATSAPP_LIMIT=100
+LEDGERLINK_EXTRA_EMAIL_500_PRICE_KOBO=300000
+LEDGERLINK_EXTRA_WHATSAPP_100_PRICE_KOBO=500000
+TERMII_API_KEY=your_termii_api_key
+TERMII_BASE_URL=https://your-termii-base-url.example
+TERMII_EMAIL_CONFIGURATION_ID=your_email_configuration_id
+TERMII_EMAIL_TEMPLATE_ID=your_email_template_id
+TERMII_WHATSAPP_DEVICE_ID=your_whatsapp_device_id
+TERMII_WHATSAPP_TEMPLATE_ID=your_whatsapp_template_id
+REMINDER_DAILY_HOUR=8
 PUBLIC_BASE_URL=https://your-public-url
 MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/?retryWrites=true&w=majority
 MONGODB_DB=ledgerlink
@@ -79,6 +92,8 @@ DB_PATH=./data/ledgerlink-db.json
 ```
 
 Do not set `PAYSTACK_SECRET_KEY` for normal SaaS operation. Each business adds its own Paystack key inside LedgerLink Settings, and `PLATFORM_PAYSTACK_SECRET_KEY` is only for LedgerLink subscription billing.
+
+If Termii email/WhatsApp env vars are missing, automated reminders stay in dry-run mode. You can still preview reminder runs from `/admin.html`.
 
 ## Paystack dashboard setup
 

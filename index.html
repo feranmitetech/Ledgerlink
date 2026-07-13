@@ -592,6 +592,44 @@
       gap: 16px;
     }
 
+    .plan-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }
+
+    .plan-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      background: var(--paper);
+    }
+
+    .plan-card.active {
+      border-color: var(--green);
+      box-shadow: 0 0 0 1px rgba(16, 124, 85, 0.16);
+    }
+
+    .plan-card h3,
+    .plan-card h4 {
+      margin: 0;
+    }
+
+    .plan-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .plan-limits {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--ink);
+    }
+
     .key-status {
       display: inline-flex;
       align-items: center;
@@ -1029,6 +1067,7 @@
     let publicInvoiceCache = {};
     let verifiedReference = "";
     let verifiedBillingReference = "";
+    let verifiedAddonReference = "";
     let saveTimer = null;
 
     const icons = {
@@ -1056,12 +1095,24 @@
         accentColor: "#2f4f9e",
         logoDataUrl: "",
         automatedRemindersEnabled: false,
+        automatedReminderChannels: {
+          email: true,
+          whatsapp: false
+        },
         reminderBeforeDays: 2,
         reminderAfterDays: 1,
         vatRate: 7.5
       },
       paystack: { configured: false, keyLast4: "", mode: "", updatedAt: "" },
-      billing: { active: false, status: "inactive", priceKobo: 1200000, priceNaira: 12000, daysLeft: 0, expiresAt: "" },
+      billing: { active: false, status: "inactive", plan: "email", planName: "Email reminders", priceKobo: 1200000, priceNaira: 12000, baseLimits: { email: 300, whatsapp: 0 }, addOns: { email: 0, whatsapp: 0 }, limits: { email: 300, whatsapp: 0 }, usage: { email: 0, whatsapp: 0 }, daysLeft: 0, expiresAt: "" },
+      billingPlans: [
+        { id: "email", name: "Email reminders", description: "Invoice tracking, Paystack collection, and automated email reminders.", priceKobo: 1200000, priceNaira: 12000, emailLimit: 300, whatsappLimit: 0, channels: ["email"] },
+        { id: "email_whatsapp", name: "Email + WhatsApp reminders", description: "Adds automated WhatsApp reminders for customers who prefer chat.", priceKobo: 2500000, priceNaira: 25000, emailLimit: 300, whatsappLimit: 100, channels: ["email", "whatsapp"] }
+      ],
+      billingAddons: [
+        { id: "extra_email_500", name: "Extra 500 emails", description: "Adds 500 automated email reminders for this billing period.", priceKobo: 300000, priceNaira: 3000, emailLimit: 500, whatsappLimit: 0 },
+        { id: "extra_whatsapp_100", name: "Extra 100 WhatsApp", description: "Adds 100 automated WhatsApp reminders for this billing period.", priceKobo: 500000, priceNaira: 5000, emailLimit: 0, whatsappLimit: 100 }
+      ],
       invoices: [
         {
           id: "INV-1007",
@@ -1130,12 +1181,19 @@
     }
 
     function normalizeState(value) {
+      const mergedSettings = { ...seedState.settings, ...(value?.settings || {}) };
+      mergedSettings.automatedReminderChannels = {
+        ...seedState.settings.automatedReminderChannels,
+        ...(value?.settings?.automatedReminderChannels || {})
+      };
       return {
         ...structuredClone(seedState),
         ...value,
-        settings: { ...seedState.settings, ...(value?.settings || {}) },
+        settings: mergedSettings,
         paystack: { ...seedState.paystack, ...(value?.paystack || {}) },
         billing: { ...seedState.billing, ...(value?.billing || {}) },
+        billingPlans: Array.isArray(value?.billingPlans) && value.billingPlans.length ? value.billingPlans : seedState.billingPlans,
+        billingAddons: Array.isArray(value?.billingAddons) && value.billingAddons.length ? value.billingAddons : seedState.billingAddons,
         invoices: Array.isArray(value?.invoices)
           ? value.invoices.map(invoice => ({ ...invoice, publicId: invoice.publicId || newPublicId() }))
           : []
@@ -1287,12 +1345,16 @@
       const enabled = state.settings.automatedRemindersEnabled === true;
       const before = Number(state.settings.reminderBeforeDays || 0);
       const after = Number(state.settings.reminderAfterDays || 0);
+      const channels = [];
+      if (state.settings.automatedReminderChannels?.email !== false) channels.push("email");
+      if (state.settings.automatedReminderChannels?.whatsapp && Number(state.billing?.limits?.whatsapp || 0) > 0) channels.push("WhatsApp");
+      const channelText = channels.length ? channels.join(" and ") : "no delivery channels";
       return {
         enabled,
         label: enabled ? "Automated reminders ON" : "Automated reminders OFF",
         detail: enabled
-          ? `LedgerLink will email unpaid customers from ${before} day${before === 1 ? "" : "s"} before due date and ${after} day${after === 1 ? "" : "s"} after due date.`
-          : "LedgerLink will not send reminder emails automatically. You can still send reminders manually from this page."
+          ? `LedgerLink will send ${channelText} reminders from ${before} day${before === 1 ? "" : "s"} before due date and ${after} day${after === 1 ? "" : "s"} after due date.`
+          : "LedgerLink will not send reminders automatically. You can still send reminders manually from this page."
       };
     }
 
@@ -1319,6 +1381,7 @@
       }
 
       verifyReturnedBillingPayment();
+      verifyReturnedAddonPayment();
 
       if (backendReady && currentUser && state.billing?.active !== true) {
         renderBillingWall();
@@ -1397,23 +1460,23 @@
             </div>
             <div>
               <h1>Activate your workspace.</h1>
-              <p>Your account is ready. Renew the monthly plan to create invoices, connect Paystack, and manage reminders.</p>
+              <p>Your account is ready. Choose the reminder plan that matches how your business follows up customers.</p>
             </div>
             <p>Built by Feranmite Technology Â· Lagos, Nigeria</p>
           </section>
           <section class="auth-form-wrap">
             <div class="auth-card">
-              <h2>LedgerLink monthly plan</h2>
-              <p>${formatMoney(state.billing?.priceNaira || 12000)} per month. Access runs for 30 days after each successful payment.</p>
+              <h2>Choose a monthly plan</h2>
+              <p>Access runs for 30 days after each successful payment. Reminder delivery limits reset on renewal.</p>
+              ${planCards()}
               <div class="actions" style="justify-content: stretch;">
-                <button class="btn primary" id="renewPlan" type="button">${icons.pay}Pay and activate</button>
                 <button class="btn" id="logoutButton" type="button">Sign out</button>
               </div>
             </div>
           </section>
         </div>
       `;
-      document.querySelector("#renewPlan")?.addEventListener("click", startBillingPayment);
+      document.querySelectorAll("[data-renew-plan]").forEach(button => button.addEventListener("click", () => startBillingPayment(button.dataset.renewPlan)));
       document.querySelector("#logoutButton")?.addEventListener("click", logout);
     }
 
@@ -1551,13 +1614,14 @@
 
     function billingBanner() {
       if (!backendReady || !state.billing || state.billing.active) return "";
+      const firstPlan = state.billingPlans?.[0] || seedState.billingPlans[0];
       return `
         <section class="billing-alert">
           <div>
             <strong>LedgerLink plan inactive</strong>
-            <span>Renew the monthly plan to collect invoice payments through this workspace.</span>
+            <span>Choose a plan to collect invoice payments and send automated reminders.</span>
           </div>
-          <button class="btn primary" id="renewPlan">${icons.pay}Renew ${formatMoney(state.billing.priceNaira || 12000)}</button>
+          <button class="btn primary" data-renew-plan="${firstPlan.id}">${icons.pay}Activate from ${formatMoney(firstPlan.priceNaira || 12000)}</button>
         </section>
       `;
     }
@@ -1568,6 +1632,58 @@
         return `Active${state.billing.daysLeft ? ` - ${state.billing.daysLeft} day${state.billing.daysLeft === 1 ? "" : "s"} left` : ""}`;
       }
       return "Inactive";
+    }
+
+    function planCards({ compact = false } = {}) {
+      const currentPlan = state.billing?.plan || "email";
+      return `<div class="plan-grid">
+        ${(state.billingPlans || seedState.billingPlans).map(plan => {
+          const isCurrent = state.billing?.active && currentPlan === plan.id;
+          return `
+            <article class="plan-card ${isCurrent ? "active" : ""}">
+              <div>
+                <h3>${escapeHtml(plan.name)}</h3>
+                <p>${escapeHtml(plan.description || "")}</p>
+              </div>
+              <strong>${formatMoney(plan.priceNaira || (plan.priceKobo / 100))}/month</strong>
+              <div class="plan-limits">
+                <span>Email reminders: ${Number(plan.emailLimit || 0).toLocaleString()}</span>
+                <span>WhatsApp reminders: ${Number(plan.whatsappLimit || 0).toLocaleString()}</span>
+              </div>
+              <button class="btn ${isCurrent ? "" : "primary"}" data-renew-plan="${escapeAttr(plan.id)}" type="button">${isCurrent ? "Renew current plan" : compact ? "Choose" : "Pay and activate"}</button>
+            </article>
+          `;
+        }).join("")}
+      </div>`;
+    }
+
+    function billingUsageText() {
+      const limits = state.billing?.limits || {};
+      const usage = state.billing?.usage || {};
+      const addOns = state.billing?.addOns || {};
+      const addonText = Number(addOns.email || 0) || Number(addOns.whatsapp || 0)
+        ? ` · Add-ons: Email +${Number(addOns.email || 0).toLocaleString()}, WhatsApp +${Number(addOns.whatsapp || 0).toLocaleString()}`
+        : "";
+      return `Email ${Number(usage.email || 0).toLocaleString()}/${Number(limits.email || 0).toLocaleString()} · WhatsApp ${Number(usage.whatsapp || 0).toLocaleString()}/${Number(limits.whatsapp || 0).toLocaleString()}${addonText}`;
+    }
+
+    function addonCards() {
+      return `<div class="plan-grid">
+        ${(state.billingAddons || seedState.billingAddons).map(addon => `
+          <article class="plan-card">
+            <div>
+              <h4>${escapeHtml(addon.name)}</h4>
+              <p>${escapeHtml(addon.description || "")}</p>
+            </div>
+            <strong>${formatMoney(addon.priceNaira || (addon.priceKobo / 100))}</strong>
+            <div class="plan-limits">
+              <span>Email credits: ${Number(addon.emailLimit || 0).toLocaleString()}</span>
+              <span>WhatsApp credits: ${Number(addon.whatsappLimit || 0).toLocaleString()}</span>
+            </div>
+            <button class="btn primary" data-buy-addon="${escapeAttr(addon.id)}" type="button">Buy add-on</button>
+          </article>
+        `).join("")}
+      </div>`;
     }
 
     function metricCard(label, value, note) {
@@ -1723,6 +1839,7 @@
     function settingsView() {
       const s = state.settings;
       const reminderStatus = automatedReminderStatus();
+      const whatsappAllowed = Boolean((state.billing?.limits?.whatsapp || 0) > 0);
       return `
         <section class="topbar">
           <div class="title-block">
@@ -1742,11 +1859,23 @@
             <div class="panel-body">
               <div class="billing-alert" style="margin-bottom: 0;">
                 <div>
-                  <strong>${formatMoney(state.billing?.priceNaira || 12000)} per month</strong>
-                  <span>${state.billing?.active ? `Next renewal: ${state.billing.expiresAt ? formatDate(state.billing.expiresAt) : "not set"}` : "Plan is inactive. Renew to collect customer payments."}</span>
+                  <strong>${escapeHtml(state.billing?.planName || "LedgerLink plan")}</strong>
+                  <span>${state.billing?.active ? `Next renewal: ${state.billing.expiresAt ? formatDate(state.billing.expiresAt) : "not set"} · ${billingUsageText()}` : "Plan is inactive. Choose a plan to collect customer payments."}</span>
                 </div>
-                <button class="btn primary" id="renewPlan" type="button">${icons.pay}Renew plan</button>
               </div>
+              <div style="margin-top: 12px;">${planCards({ compact: true })}</div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Reminder add-ons</h3>
+                <p>Buy extra delivery credits for the current 30-day billing period.</p>
+              </div>
+              <span class="key-status">${billingUsageText()}</span>
+            </div>
+            <div class="panel-body">
+              ${state.billing?.active ? addonCards() : `<div class="empty">Activate a plan before buying add-ons.</div>`}
             </div>
           </section>
           <section class="panel">
@@ -1787,7 +1916,9 @@
                   </div>
                 </div>
               </div>
-              <label class="full"><input type="checkbox" name="automatedRemindersEnabled" ${s.automatedRemindersEnabled ? "checked" : ""}> Send automated email reminders <span class="key-status ${reminderStatus.enabled ? "enabled" : "disabled"}">${reminderStatus.enabled ? "Currently ON" : "Currently OFF"}</span></label>
+              <label class="full"><input type="checkbox" name="automatedRemindersEnabled" ${s.automatedRemindersEnabled ? "checked" : ""}> Send automated reminders <span class="key-status ${reminderStatus.enabled ? "enabled" : "disabled"}">${reminderStatus.enabled ? "Currently ON" : "Currently OFF"}</span></label>
+              <label><input type="checkbox" name="reminderEmailChannel" ${s.automatedReminderChannels?.email !== false ? "checked" : ""}> Email delivery</label>
+              <label><input type="checkbox" name="reminderWhatsappChannel" ${s.automatedReminderChannels?.whatsapp ? "checked" : ""} ${whatsappAllowed ? "" : "disabled"}> WhatsApp delivery${whatsappAllowed ? "" : " (upgrade required)"}</label>
               <label>Reminder before due date (days)<input type="number" min="0" name="reminderBeforeDays" value="${escapeAttr(s.reminderBeforeDays)}"></label>
               <label>Reminder after due date (days)<input type="number" min="0" name="reminderAfterDays" value="${escapeAttr(s.reminderAfterDays)}"></label>
               <div class="full actions">
@@ -2020,7 +2151,8 @@
       document.querySelector("#logoUpload")?.addEventListener("change", handleLogoUpload);
       document.querySelector("#removeLogo")?.addEventListener("click", removeLogo);
       document.querySelector("#savePaystackKey")?.addEventListener("click", savePaystackKey);
-      document.querySelector("#renewPlan")?.addEventListener("click", startBillingPayment);
+      document.querySelectorAll("[data-renew-plan]").forEach(button => button.addEventListener("click", () => startBillingPayment(button.dataset.renewPlan)));
+      document.querySelectorAll("[data-buy-addon]").forEach(button => button.addEventListener("click", () => startAddonPayment(button.dataset.buyAddon)));
       document.querySelector("#exportCsv")?.addEventListener("click", exportCsv);
       document.querySelector("#copyAllReminders")?.addEventListener("click", copyAllReminders);
       document.querySelector("#sendBatchEmail")?.addEventListener("click", sendBatchEmail);
@@ -2147,11 +2279,18 @@
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       const previousLogo = state.settings.logoDataUrl || "";
+      const settingsFields = Object.fromEntries(form.entries());
+      delete settingsFields.reminderEmailChannel;
+      delete settingsFields.reminderWhatsappChannel;
       state.settings = {
         ...state.settings,
-        ...Object.fromEntries(form.entries()),
+        ...settingsFields,
         logoDataUrl: previousLogo,
-        automatedRemindersEnabled: form.get("automatedRemindersEnabled") === "on"
+        automatedRemindersEnabled: form.get("automatedRemindersEnabled") === "on",
+        automatedReminderChannels: {
+          email: form.get("reminderEmailChannel") === "on",
+          whatsapp: form.get("reminderWhatsappChannel") === "on"
+        }
       };
       state.settings.vatRate = Number(state.settings.vatRate || 0);
       state.settings.reminderBeforeDays = Number(state.settings.reminderBeforeDays || 0);
@@ -2187,16 +2326,48 @@
       }
     }
 
-    async function startBillingPayment() {
+    async function startBillingPayment(planId = "email") {
       if (!backendReady) {
         showToast("Start the backend before renewing a plan.");
         return;
       }
       try {
-        const response = await fetch("/api/billing/initialize", { method: "POST" });
+        const response = await fetch("/api/billing/initialize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ planId })
+        });
         const payload = await response.json();
         if (response.status === 404) throw new Error("The running server is older. Restart with the latest server.js.");
         if (!response.ok) throw new Error(payload.error || "Could not start renewal payment.");
+        const accessCode = payload.access_code || payload.accessCode || payload.data?.access_code;
+        if (!accessCode) throw new Error("No Paystack access code returned.");
+        if (!window.PaystackPop) throw new Error("Paystack Popup script is not available.");
+        const popup = new PaystackPop();
+        popup.resumeTransaction(accessCode);
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function startAddonPayment(addonId) {
+      if (!backendReady) {
+        showToast("Start the backend before buying an add-on.");
+        return;
+      }
+      if (!state.billing?.active) {
+        showToast("Activate a LedgerLink plan before buying add-ons.");
+        return;
+      }
+      try {
+        const response = await fetch("/api/billing/addons/initialize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ addonId })
+        });
+        const payload = await response.json();
+        if (response.status === 404) throw new Error("The running server is older. Restart with the latest server.js.");
+        if (!response.ok) throw new Error(payload.error || "Could not start add-on payment.");
         const accessCode = payload.access_code || payload.accessCode || payload.data?.access_code;
         if (!accessCode) throw new Error("No Paystack access code returned.");
         if (!window.PaystackPop) throw new Error("Paystack Popup script is not available.");
@@ -2217,9 +2388,32 @@
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Billing verification failed.");
         if (payload.billing) state.billing = payload.billing;
+        if (payload.billingPlans) state.billingPlans = payload.billingPlans;
+        if (payload.billingAddons) state.billingAddons = payload.billingAddons;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         history.replaceState(null, "", `${location.pathname}${location.hash}`);
         showToast("LedgerLink plan renewed.");
+        hydrateFromBackend();
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function verifyReturnedAddonPayment() {
+      const params = new URLSearchParams(location.search);
+      const reference = params.get("addon") === "return" ? (params.get("reference") || params.get("trxref") || "") : "";
+      if (!reference || reference === verifiedAddonReference || !backendReady || !currentUser) return;
+      verifiedAddonReference = reference;
+      try {
+        const response = await fetch(`/api/billing/addons/verify?reference=${encodeURIComponent(reference)}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Add-on verification failed.");
+        if (payload.billing) state.billing = payload.billing;
+        if (payload.billingPlans) state.billingPlans = payload.billingPlans;
+        if (payload.billingAddons) state.billingAddons = payload.billingAddons;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        history.replaceState(null, "", `${location.pathname}${location.hash}`);
+        showToast("Reminder add-on activated.");
         hydrateFromBackend();
       } catch (error) {
         showToast(error.message);

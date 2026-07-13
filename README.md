@@ -73,7 +73,20 @@ Set these on Render:
 APP_SECRET=use_a_long_random_secret_at_least_32_characters
 ADMIN_API_TOKEN=use_a_different_long_random_admin_token
 PLATFORM_PAYSTACK_SECRET_KEY=sk_live_your_ledgerlink_billing_key
-LEDGERLINK_MONTHLY_PRICE_KOBO=1200000
+LEDGERLINK_EMAIL_PLAN_PRICE_KOBO=1200000
+LEDGERLINK_EMAIL_PLAN_EMAIL_LIMIT=300
+LEDGERLINK_EMAIL_WHATSAPP_PLAN_PRICE_KOBO=2500000
+LEDGERLINK_EMAIL_WHATSAPP_PLAN_EMAIL_LIMIT=300
+LEDGERLINK_EMAIL_WHATSAPP_PLAN_WHATSAPP_LIMIT=100
+LEDGERLINK_EXTRA_EMAIL_500_PRICE_KOBO=300000
+LEDGERLINK_EXTRA_WHATSAPP_100_PRICE_KOBO=500000
+TERMII_API_KEY=your_termii_api_key
+TERMII_BASE_URL=https://your-termii-base-url.example
+TERMII_EMAIL_CONFIGURATION_ID=your_email_configuration_id
+TERMII_EMAIL_TEMPLATE_ID=your_email_template_id
+TERMII_WHATSAPP_DEVICE_ID=your_whatsapp_device_id
+TERMII_WHATSAPP_TEMPLATE_ID=your_whatsapp_template_id
+REMINDER_DAILY_HOUR=8
 PUBLIC_BASE_URL=https://your-ledgerlink-domain.onrender.com
 ```
 
@@ -107,12 +120,20 @@ The backend marks an invoice paid only after confirming Paystack returned:
 
 ## Admin subscription support
 
-Use this only for support/testing when you need to activate or deactivate an account without editing MongoDB directly.
+Open `/admin.html` on your deployed domain to view businesses, billing status, recent audit logs, reminder runs, and subscription support actions. The page asks for `ADMIN_API_TOKEN`.
+
+Use the API directly only for support/testing when you need to activate or deactivate an account without editing MongoDB directly.
 
 ```powershell
 $body = @{ email = "customer@example.com"; action = "activate"; days = 30 } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "https://your-ledgerlink-domain.onrender.com/api/admin/subscriptions" -Headers @{ "x-admin-token" = "your_admin_token" } -ContentType "application/json" -Body $body
 ```
+
+## Audit Logs And Billing History
+
+LedgerLink stores recent audit events inside the app state for actions such as registration, login, Paystack key updates, billing initialization, verified subscription payment, admin activation/deactivation, invoice payment, and automated reminders.
+
+Each business also has a billing history list with pending subscription initialization, successful subscription payments, and admin subscription changes. The signed-in user sees their recent billing history in state, and the admin dashboard shows recent entries per business.
 
 To deactivate:
 
@@ -152,13 +173,73 @@ https://your-public-url.example/paystack/webhook
 
 `PUBLIC_BASE_URL` is also used for Paystack callback URLs after checkout.
 
-## Email reminders
+## Termii reminders
 
 The email buttons open Gmail compose in a new browser tab because many Windows machines do not have a default `mailto:` email app configured. If the browser blocks the popup, the app falls back to a standard `mailto:` link.
 
-Reminder timing is currently automatic, but sending is manual. LedgerLink builds a queue from each invoice due date using the **before due date** and **after due date** settings. To send reminders automatically in the background, add an email/SMS provider and a scheduled worker.
+Reminder timing is business-controlled. Each business must enable automated reminders in Settings, then choose Email and, when their plan allows it, WhatsApp delivery. LedgerLink builds a queue from that business's invoice due dates using the **before due date** and **after due date** settings.
+
+Automated delivery uses your LedgerLink Termii account, not business-owned Termii keys. Email uses Termii's templated email endpoint. WhatsApp uses a pre-approved Termii WhatsApp template with six variables: customer name, business name, invoice number, amount, due date, and payment link. Without the Termii env vars, reminder runs stay in dry-run mode.
+
+Plans and add-ons are quota-based. By default, the email plan includes 300 email reminders, the WhatsApp plan costs ₦25,000 and includes 300 email reminders plus 100 WhatsApp reminders, and add-ons add 500 emails for ₦3,000 or 100 WhatsApp reminders for ₦5,000. Add-on credits apply to the current subscription period.
 
 **Email all due** opens one Gmail compose window with due customers in BCC. It is a reminder broadcast, but recipients should not see each other's email addresses.
+
+### Termii template setup
+
+Create the email template in Termii under **Engage -> Email Templates**. Use variables with these names:
+
+```text
+customer_name
+business_name
+invoice_id
+amount
+due_date
+payment_link
+message
+reply_to
+```
+
+Suggested email subject:
+
+```text
+Payment reminder from {{business_name}} - {{invoice_id}}
+```
+
+Suggested email body:
+
+```text
+Hello {{customer_name}},
+
+{{business_name}} sent you a payment reminder for invoice {{invoice_id}}.
+
+Amount: {{amount}}
+Due date: {{due_date}}
+
+Pay securely here:
+{{payment_link}}
+
+{{message}}
+
+Powered by LedgerLink.
+```
+
+For WhatsApp, create/submit an approved Termii template with six variables:
+
+```text
+Hello {{1}}, this is a payment reminder from {{2}} for invoice {{3}} of {{4}}, due on {{5}}. Pay here: {{6}}. Powered by LedgerLink.
+```
+
+LedgerLink sends the WhatsApp variables in this order:
+
+```text
+1 = customer_name
+2 = business_name
+3 = invoice_id
+4 = amount
+5 = due_date
+6 = payment_link
+```
 
 ## Invoice branding
 

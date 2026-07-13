@@ -223,7 +223,7 @@
         <tr>
           <td><strong>${escapeHtml(item.businessName || "Untitled")}</strong><br><small>${escapeHtml(item.id)}</small></td>
           <td>${escapeHtml(item.ownerEmail || "")}</td>
-          <td><span class="status ${item.billing.active ? "active" : "inactive"}">${item.billing.active ? "Active" : "Inactive"}</span><br><small>${item.billing.daysLeft || 0} days left</small></td>
+          <td><span class="status ${item.billing.active ? "active" : "inactive"}">${escapeHtml(item.billing.planName || item.billing.status)}</span><br><small>${item.billing.daysLeft || 0} days left · Email ${Number(item.billing.usage?.email || 0)}/${Number(item.billing.limits?.email || 0)} · WhatsApp ${Number(item.billing.usage?.whatsapp || 0)}/${Number(item.billing.limits?.whatsapp || 0)}</small></td>
           <td>${item.invoiceCount}<br><small>${item.outstandingCount} outstanding</small></td>
           <td>${item.paystack.configured ? `${escapeHtml(item.paystack.mode)} ending ${escapeHtml(item.paystack.keyLast4)}` : "Not connected"}</td>
         </tr>

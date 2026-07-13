@@ -11,11 +11,16 @@ const PLATFORM_PAYSTACK_SECRET_KEY = (process.env.PLATFORM_PAYSTACK_SECRET_KEY |
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
 const APP_SECRET = (process.env.APP_SECRET || "").trim();
 const ADMIN_API_TOKEN = (process.env.ADMIN_API_TOKEN || "").trim();
-const RESEND_API_KEY = (process.env.RESEND_API_KEY || "").trim();
-const REMINDER_FROM_EMAIL = (process.env.REMINDER_FROM_EMAIL || "").trim();
+const TERMII_API_KEY = (process.env.TERMII_API_KEY || "").trim();
+const TERMII_BASE_URL = (process.env.TERMII_BASE_URL || "").replace(/\/$/, "");
+const TERMII_EMAIL_CONFIGURATION_ID = (process.env.TERMII_EMAIL_CONFIGURATION_ID || "").trim();
+const TERMII_EMAIL_TEMPLATE_ID = (process.env.TERMII_EMAIL_TEMPLATE_ID || "").trim();
+const TERMII_WHATSAPP_DEVICE_ID = (process.env.TERMII_WHATSAPP_DEVICE_ID || "").trim();
+const TERMII_WHATSAPP_TEMPLATE_ID = (process.env.TERMII_WHATSAPP_TEMPLATE_ID || "").trim();
 const REMINDER_DAILY_HOUR = Number(process.env.REMINDER_DAILY_HOUR || 8);
-const BILLING_PRICE_KOBO = Number(process.env.LEDGERLINK_MONTHLY_PRICE_KOBO || 1200000);
 const BILLING_DURATION_DAYS = Number(process.env.LEDGERLINK_BILLING_DAYS || 30);
+const BILLING_PLANS = buildBillingPlans();
+const BILLING_ADDONS = buildBillingAddons();
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const DATABASE_URL = (process.env.DATABASE_URL || "").trim();
 const MONGODB_URI = (process.env.MONGODB_URI || "").trim();
@@ -47,6 +52,10 @@ const seedSettings = {
   accentColor: "#2f4f9e",
   logoDataUrl: "",
   automatedRemindersEnabled: false,
+  automatedReminderChannels: {
+    email: true,
+    whatsapp: false
+  },
   reminderBeforeDays: 2,
   reminderAfterDays: 1,
   vatRate: 7.5
@@ -97,6 +106,84 @@ const seedInvoices = [
     reminders: []
   }
 ];
+
+function buildBillingPlans() {
+  const emailPrice = Number(process.env.LEDGERLINK_EMAIL_PLAN_PRICE_KOBO || process.env.LEDGERLINK_MONTHLY_PRICE_KOBO || 1200000);
+  return [
+    {
+      id: "email",
+      name: "Email reminders",
+      description: "Invoice tracking, Paystack collection, and automated email reminders.",
+      priceKobo: emailPrice,
+      emailLimit: Number(process.env.LEDGERLINK_EMAIL_PLAN_EMAIL_LIMIT || 300),
+      whatsappLimit: 0,
+      channels: ["email"]
+    },
+    {
+      id: "email_whatsapp",
+      name: "Email + WhatsApp reminders",
+      description: "Everything in Email reminders, plus automated WhatsApp reminder delivery.",
+      priceKobo: Number(process.env.LEDGERLINK_EMAIL_WHATSAPP_PLAN_PRICE_KOBO || 2500000),
+      emailLimit: Number(process.env.LEDGERLINK_EMAIL_WHATSAPP_PLAN_EMAIL_LIMIT || 300),
+      whatsappLimit: Number(process.env.LEDGERLINK_EMAIL_WHATSAPP_PLAN_WHATSAPP_LIMIT || 100),
+      channels: ["email", "whatsapp"]
+    }
+  ];
+}
+
+function buildBillingAddons() {
+  return [
+    {
+      id: "extra_email_500",
+      name: "Extra 500 emails",
+      description: "Adds 500 automated email reminders for the current billing period.",
+      priceKobo: Number(process.env.LEDGERLINK_EXTRA_EMAIL_500_PRICE_KOBO || 300000),
+      emailLimit: 500,
+      whatsappLimit: 0
+    },
+    {
+      id: "extra_whatsapp_100",
+      name: "Extra 100 WhatsApp",
+      description: "Adds 100 automated WhatsApp reminders for the current billing period.",
+      priceKobo: Number(process.env.LEDGERLINK_EXTRA_WHATSAPP_100_PRICE_KOBO || 500000),
+      emailLimit: 0,
+      whatsappLimit: 100
+    }
+  ];
+}
+
+function getBillingPlan(planId = "") {
+  return BILLING_PLANS.find(plan => plan.id === planId) || BILLING_PLANS[0];
+}
+
+function getBillingAddon(addonId = "") {
+  return BILLING_ADDONS.find(addon => addon.id === addonId) || null;
+}
+
+function publicBillingPlans() {
+  return BILLING_PLANS.map(plan => ({
+    id: plan.id,
+    name: plan.name,
+    description: plan.description,
+    priceKobo: plan.priceKobo,
+    priceNaira: plan.priceKobo / 100,
+    emailLimit: plan.emailLimit,
+    whatsappLimit: plan.whatsappLimit,
+    channels: plan.channels
+  }));
+}
+
+function publicBillingAddons() {
+  return BILLING_ADDONS.map(addon => ({
+    id: addon.id,
+    name: addon.name,
+    description: addon.description,
+    priceKobo: addon.priceKobo,
+    priceNaira: addon.priceKobo / 100,
+    emailLimit: addon.emailLimit,
+    whatsappLimit: addon.whatsappLimit
+  }));
+}
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -266,7 +353,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/billing/status" && req.method === "GET") {
       const { user, db } = await requireUser(req, res);
       if (!user) return;
-      writeJson(res, 200, { billing: subscriptionStatus(getBusinessForUser(db, user)) });
+      writeJson(res, 200, { billing: subscriptionStatus(getBusinessForUser(db, user), db), billingPlans: publicBillingPlans(), billingAddons: publicBillingAddons() });
       return;
     }
 
@@ -275,21 +362,24 @@ const server = http.createServer(async (req, res) => {
       requirePlatformSecret();
       const { user, db } = await requireUser(req, res);
       if (!user) return;
+      const body = await readJson(req);
+      const plan = getBillingPlan(body.planId || body.plan);
       const business = getBusinessForUser(db, user);
       const callbackBase = PUBLIC_BASE_URL || `${url.protocol}//${req.headers.host}`;
-      const reference = `LL-SUB-${business.id}-${Date.now()}`;
+      const reference = `LL-SUB-${plan.id}-${business.id}-${Date.now()}`;
       const payload = {
         email: user.email,
-        amount: BILLING_PRICE_KOBO,
+        amount: plan.priceKobo,
         currency: "NGN",
         reference,
         callback_url: `${callbackBase}/?billing=return`,
         metadata: {
           project: "ledgerlink-saas",
-          plan: "monthly",
+          plan: plan.id,
+          planName: plan.name,
           businessId: business.id,
           userId: user.id,
-          expectedAmount: BILLING_PRICE_KOBO,
+          expectedAmount: plan.priceKobo,
           expectedCurrency: "NGN"
         }
       };
@@ -302,17 +392,85 @@ const server = http.createServer(async (req, res) => {
         addBillingEvent(business, {
           type: "subscription_initialize",
           status: "pending",
-          amountKobo: BILLING_PRICE_KOBO,
+          amountKobo: plan.priceKobo,
           currency: "NGN",
           reference,
-          source: "paystack"
+          source: "paystack",
+          plan: plan.id
         });
         logAudit(db, {
           event: "billing.initialize",
           actorUserId: user.id,
           actorEmail: user.email,
           businessId: business.id,
-          message: "Subscription payment initialized"
+          message: `${plan.name} payment initialized`,
+          metadata: { plan: plan.id }
+        });
+        await writeDb(db);
+      }
+      writeJson(res, paystackResponse.status, paystackPayload);
+      return;
+    }
+
+    if (url.pathname === "/api/billing/addons/initialize" && req.method === "POST") {
+      if (!checkRateLimit(req, res, "billing:addon:init", 12, 10 * 60 * 1000)) return;
+      requirePlatformSecret();
+      const { user, db } = await requireUser(req, res);
+      if (!user) return;
+      const business = getBusinessForUser(db, user);
+      if (!subscriptionStatus(business, db).active) {
+        writeJson(res, 402, { error: "Renew your LedgerLink plan before buying reminder add-ons." });
+        return;
+      }
+      const body = await readJson(req);
+      const addon = getBillingAddon(body.addonId || body.addon);
+      if (!addon) {
+        writeJson(res, 400, { error: "Unknown add-on bundle." });
+        return;
+      }
+      const callbackBase = PUBLIC_BASE_URL || `${url.protocol}//${req.headers.host}`;
+      const reference = `LL-ADDON-${addon.id}-${business.id}-${Date.now()}`;
+      const payload = {
+        email: user.email,
+        amount: addon.priceKobo,
+        currency: "NGN",
+        reference,
+        callback_url: `${callbackBase}/?addon=return`,
+        metadata: {
+          project: "ledgerlink-saas",
+          billingType: "addon",
+          addon: addon.id,
+          addonName: addon.name,
+          businessId: business.id,
+          userId: user.id,
+          expectedAmount: addon.priceKobo,
+          expectedCurrency: "NGN"
+        }
+      };
+      const paystackResponse = await paystackFetch("transaction/initialize", PLATFORM_PAYSTACK_SECRET_KEY, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      const paystackPayload = await paystackResponse.json();
+      if (paystackResponse.ok && paystackPayload.status) {
+        addBillingEvent(business, {
+          type: "addon_initialize",
+          status: "pending",
+          amountKobo: addon.priceKobo,
+          currency: "NGN",
+          reference,
+          source: "paystack",
+          addon: addon.id,
+          emailCredits: addon.emailLimit,
+          whatsappCredits: addon.whatsappLimit
+        });
+        logAudit(db, {
+          event: "billing.addon_initialize",
+          actorUserId: user.id,
+          actorEmail: user.email,
+          businessId: business.id,
+          message: `${addon.name} payment initialized`,
+          metadata: { addon: addon.id }
         });
         await writeDb(db);
       }
@@ -338,7 +496,31 @@ const server = http.createServer(async (req, res) => {
           return;
         }
       }
-      writeJson(res, 200, { ...data, billing: subscriptionStatus(getBusinessForUser(await readDb(), user)) });
+      const freshDb = await readDb();
+      writeJson(res, 200, { ...data, billing: subscriptionStatus(getBusinessForUser(freshDb, user), freshDb), billingPlans: publicBillingPlans(), billingAddons: publicBillingAddons() });
+      return;
+    }
+
+    if (url.pathname === "/api/billing/addons/verify" && req.method === "GET") {
+      if (!checkRateLimit(req, res, "billing:addon:verify", 30, 10 * 60 * 1000)) return;
+      requirePlatformSecret();
+      const { user } = await requireUser(req, res);
+      if (!user) return;
+      const reference = url.searchParams.get("reference");
+      if (!reference) {
+        writeJson(res, 400, { error: "Missing transaction reference." });
+        return;
+      }
+      const data = await verifyPaystack(reference, PLATFORM_PAYSTACK_SECRET_KEY);
+      if (data.status && data.data?.status === "success") {
+        const result = await markAddonPaidFromTransaction(data.data, user.id);
+        if (!result.ok) {
+          writeJson(res, 422, { error: result.error, paystack: data });
+          return;
+        }
+      }
+      const freshDb = await readDb();
+      writeJson(res, 200, { ...data, billing: subscriptionStatus(getBusinessForUser(freshDb, user), freshDb), billingPlans: publicBillingPlans(), billingAddons: publicBillingAddons() });
       return;
     }
 
@@ -503,9 +685,14 @@ const server = http.createServer(async (req, res) => {
       }
       const event = JSON.parse(rawBody);
       if (event.event === "charge.success") {
-        const result = event.data?.metadata?.project === "ledgerlink-saas"
-          ? await markSubscriptionPaidFromTransaction(event.data)
-          : await markInvoicePaidFromTransaction(event.data);
+        let result;
+        if (event.data?.metadata?.project === "ledgerlink-saas" && event.data?.metadata?.billingType === "addon") {
+          result = await markAddonPaidFromTransaction(event.data);
+        } else if (event.data?.metadata?.project === "ledgerlink-saas") {
+          result = await markSubscriptionPaidFromTransaction(event.data);
+        } else {
+          result = await markInvoicePaidFromTransaction(event.data);
+        }
         if (!result.ok) console.error("Webhook payment rejected:", result.error);
       }
       writeJson(res, 200, { received: true });
@@ -549,7 +736,7 @@ async function startServer() {
     console.log(`Storage: ${storageLabel()}`);
     if (LOADED_ENV_FILES.length) console.log(`Loaded env: ${LOADED_ENV_FILES.join(", ")}`);
     if (!PLATFORM_PAYSTACK_SECRET_KEY) console.log("Platform billing is disabled until PLATFORM_PAYSTACK_SECRET_KEY is set.");
-    if (!reminderEmailReady()) console.log("Automated reminders are in dry-run mode until RESEND_API_KEY and REMINDER_FROM_EMAIL are set.");
+    if (!reminderProviderReady()) console.log("Automated reminders are in dry-run mode until Termii email or WhatsApp settings are configured.");
     if (PUBLIC_BASE_URL) console.log(`Public webhook/callback base URL: ${PUBLIC_BASE_URL}`);
   });
   setInterval(runReminderScheduleIfDue, 60 * 60 * 1000).unref();
@@ -782,7 +969,9 @@ function getStateForUser(db, user) {
   return {
     settings: business.settings,
     paystack: publicPaystackStatus(business),
-    billing: subscriptionStatus(business),
+    billing: subscriptionStatus(business, db),
+    billingPlans: publicBillingPlans(),
+    billingAddons: publicBillingAddons(),
     billingHistory: (business.billingHistory || []).slice(-20).map(publicBillingEvent),
     invoices: db.invoices.filter(invoice => invoice.businessId === business.id).map(({ businessId, ...invoice }) => invoice)
   };
@@ -796,12 +985,22 @@ function sanitizeSettings(settings) {
     accentColor: validColor(settings.accentColor, seedSettings.accentColor),
     logoDataUrl: validLogoDataUrl(settings.logoDataUrl) ? settings.logoDataUrl : "",
     automatedRemindersEnabled: settings.automatedRemindersEnabled === true || settings.automatedRemindersEnabled === "true" || settings.automatedRemindersEnabled === "on",
+    automatedReminderChannels: sanitizeReminderChannels(settings.automatedReminderChannels),
     vatRate: Number(settings.vatRate ?? seedSettings.vatRate),
     reminderBeforeDays: Number(settings.reminderBeforeDays ?? seedSettings.reminderBeforeDays),
     reminderAfterDays: Number(settings.reminderAfterDays ?? seedSettings.reminderAfterDays)
   };
   delete clean.paystackInitUrl;
+  delete clean.reminderEmailChannel;
+  delete clean.reminderWhatsappChannel;
   return clean;
+}
+
+function sanitizeReminderChannels(channels = {}) {
+  return {
+    email: channels.email !== false && channels.email !== "false" && channels.email !== "off",
+    whatsapp: channels.whatsapp === true || channels.whatsapp === "true" || channels.whatsapp === "on"
+  };
 }
 
 function sanitizePaystack(paystack) {
@@ -818,6 +1017,7 @@ function sanitizeSubscription(subscription) {
     status: subscription.status === "active" ? "active" : "inactive",
     expiresAt: subscription.expiresAt || "",
     paystackReference: subscription.paystackReference || "",
+    plan: getBillingPlan(subscription.plan).id,
     updatedAt: subscription.updatedAt || ""
   };
 }
@@ -831,6 +1031,10 @@ function sanitizeBillingHistory(history) {
     currency: String(event.currency || "NGN"),
     reference: String(event.reference || ""),
     source: String(event.source || ""),
+    plan: getBillingPlan(event.plan).id,
+    addon: String(event.addon || ""),
+    emailCredits: Number(event.emailCredits || 0),
+    whatsappCredits: Number(event.whatsappCredits || 0),
     periodStart: event.periodStart || "",
     periodEnd: event.periodEnd || "",
     createdAt: event.createdAt || new Date().toISOString()
@@ -846,6 +1050,10 @@ function publicBillingEvent(event) {
     currency: event.currency,
     reference: event.reference,
     source: event.source,
+    plan: event.plan,
+    addon: event.addon,
+    emailCredits: event.emailCredits,
+    whatsappCredits: event.whatsappCredits,
     periodStart: event.periodStart,
     periodEnd: event.periodEnd,
     createdAt: event.createdAt
@@ -893,17 +1101,83 @@ function publicPaystackStatus(business) {
   };
 }
 
-function subscriptionStatus(business) {
+function subscriptionStatus(business, db = null) {
   const subscription = sanitizeSubscription(business?.subscription || {});
+  const plan = getBillingPlan(subscription.plan);
   const expiresAt = subscription.expiresAt ? new Date(subscription.expiresAt) : null;
   const active = subscription.status === "active" && expiresAt && expiresAt > new Date();
+  const usage = db ? notificationUsageForBusiness(db, business, subscription) : { email: 0, whatsapp: 0 };
+  const addOns = billingAddonsForBusiness(business, subscription);
+  const limits = {
+    email: plan.emailLimit + addOns.email,
+    whatsapp: plan.whatsappLimit + addOns.whatsapp
+  };
   return {
     active: Boolean(active),
     status: active ? "active" : "inactive",
-    priceKobo: BILLING_PRICE_KOBO,
-    priceNaira: BILLING_PRICE_KOBO / 100,
+    plan: plan.id,
+    planName: plan.name,
+    priceKobo: plan.priceKobo,
+    priceNaira: plan.priceKobo / 100,
+    baseLimits: {
+      email: plan.emailLimit,
+      whatsapp: plan.whatsappLimit
+    },
+    addOns,
+    limits,
+    usage,
     expiresAt: subscription.expiresAt || "",
     daysLeft: active ? Math.ceil((expiresAt - new Date()) / 86400000) : 0
+  };
+}
+
+function billingAddonsForBusiness(business, subscription = null) {
+  const period = billingPeriodForBusiness(business, subscription);
+  const addOns = { email: 0, whatsapp: 0 };
+  if (!period.start || !period.end) return addOns;
+  for (const event of Array.isArray(business?.billingHistory) ? business.billingHistory : []) {
+    if (event.type !== "addon_payment" || event.status !== "paid") continue;
+    const paidAt = new Date(event.createdAt || "");
+    if (!Number.isFinite(paidAt.getTime()) || paidAt < period.start || paidAt > period.end) continue;
+    addOns.email += Number(event.emailCredits || 0);
+    addOns.whatsapp += Number(event.whatsappCredits || 0);
+  }
+  return addOns;
+}
+
+function notificationUsageForBusiness(db, business, subscription = null) {
+  const period = billingPeriodForBusiness(business, subscription);
+  const usage = { email: 0, whatsapp: 0 };
+  if (!period.start || !period.end) return usage;
+  const invoices = (db?.invoices || []).filter(invoice => invoice.businessId === business?.id);
+  for (const invoice of invoices) {
+    for (const reminder of Array.isArray(invoice.reminders) ? invoice.reminders : []) {
+      const sentAt = new Date(reminder.at || reminder.date || "");
+      if (!Number.isFinite(sentAt.getTime()) || sentAt < period.start || sentAt > period.end) continue;
+      if (reminder.channel === "Auto Email") usage.email += 1;
+      if (reminder.channel === "Auto WhatsApp") usage.whatsapp += 1;
+    }
+  }
+  return usage;
+}
+
+function billingPeriodForBusiness(business, subscription = null) {
+  const cleanSubscription = subscription || sanitizeSubscription(business?.subscription || {});
+  const paidPeriods = [...(business?.billingHistory || [])]
+    .reverse()
+    .filter(event => ["subscription_payment", "admin_activate"].includes(event.type) && event.periodStart && event.periodEnd);
+  const now = new Date();
+  const currentPeriod = paidPeriods.find(event => {
+    const start = new Date(event.periodStart);
+    const end = new Date(event.periodEnd);
+    return Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && start <= now && end >= now;
+  });
+  const latestPaid = currentPeriod || paidPeriods[0];
+  const start = latestPaid?.periodStart ? new Date(latestPaid.periodStart) : cleanSubscription.updatedAt ? new Date(cleanSubscription.updatedAt) : null;
+  const end = latestPaid?.periodEnd ? new Date(latestPaid.periodEnd) : cleanSubscription.expiresAt ? new Date(cleanSubscription.expiresAt) : null;
+  return {
+    start: start && Number.isFinite(start.getTime()) ? start : null,
+    end: end && Number.isFinite(end.getTime()) ? end : null
   };
 }
 
@@ -1012,7 +1286,11 @@ async function markSubscriptionPaidFromTransaction(transaction, expectedUserId =
   if (metadata.project !== "ledgerlink-saas") return { ok: false, error: "Unexpected billing project metadata." };
   if (transaction.status !== "success") return { ok: false, error: "Subscription transaction was not successful." };
   if (transaction.currency !== "NGN") return { ok: false, error: "Unexpected subscription currency." };
-  if (Number(transaction.amount) !== BILLING_PRICE_KOBO) return { ok: false, error: "Subscription amount does not match the LedgerLink plan." };
+  const plan = getBillingPlan(metadata.plan);
+  const expectedAmount = Number(metadata.expectedAmount || plan.priceKobo);
+  if (Number(transaction.amount) !== expectedAmount || expectedAmount !== plan.priceKobo) {
+    return { ok: false, error: "Subscription amount does not match the LedgerLink plan." };
+  }
   const existingPaidEvent = (business.billingHistory || []).find(event =>
     event.reference === transaction.reference && event.type === "subscription_payment" && event.status === "paid"
   );
@@ -1028,15 +1306,17 @@ async function markSubscriptionPaidFromTransaction(transaction, expectedUserId =
     status: "active",
     expiresAt,
     paystackReference: transaction.reference,
+    plan: plan.id,
     updatedAt: new Date().toISOString()
   };
   addBillingEvent(business, {
     type: "subscription_payment",
     status: "paid",
-    amountKobo: Number(transaction.amount || BILLING_PRICE_KOBO),
+    amountKobo: Number(transaction.amount || plan.priceKobo),
     currency: String(transaction.currency || "NGN"),
     reference: transaction.reference,
     source: "paystack",
+    plan: plan.id,
     periodStart,
     periodEnd: expiresAt
   });
@@ -1044,17 +1324,68 @@ async function markSubscriptionPaidFromTransaction(transaction, expectedUserId =
     event: "billing.paid",
     actorUserId: business.ownerUserId,
     businessId: business.id,
-    message: "Subscription payment verified",
-    metadata: { reference: transaction.reference, expiresAt }
+    message: `${plan.name} payment verified`,
+    metadata: { reference: transaction.reference, expiresAt, plan: plan.id }
   });
   await writeDb(db);
   return { ok: true, expiresAt };
+}
+
+async function markAddonPaidFromTransaction(transaction, expectedUserId = "") {
+  const metadata = transaction?.metadata || {};
+  const db = await readDb();
+  const business = db.businesses.find(item => item.id === metadata.businessId);
+  if (!business) return { ok: false, error: "Business not found for add-on payment." };
+  if (expectedUserId && business.ownerUserId !== expectedUserId) {
+    return { ok: false, error: "Add-on payment does not belong to this account." };
+  }
+  if (metadata.project !== "ledgerlink-saas" || metadata.billingType !== "addon") {
+    return { ok: false, error: "Unexpected add-on payment metadata." };
+  }
+  if (!subscriptionStatus(business, db).active) return { ok: false, error: "Subscription must be active before applying add-on credits." };
+  if (transaction.status !== "success") return { ok: false, error: "Add-on transaction was not successful." };
+  if (transaction.currency !== "NGN") return { ok: false, error: "Unexpected add-on currency." };
+  const addon = getBillingAddon(metadata.addon);
+  if (!addon) return { ok: false, error: "Unknown add-on bundle." };
+  const expectedAmount = Number(metadata.expectedAmount || addon.priceKobo);
+  if (Number(transaction.amount) !== expectedAmount || expectedAmount !== addon.priceKobo) {
+    return { ok: false, error: "Add-on amount does not match the selected bundle." };
+  }
+  const existingPaidEvent = (business.billingHistory || []).find(event =>
+    event.reference === transaction.reference && event.type === "addon_payment" && event.status === "paid"
+  );
+  if (existingPaidEvent) return { ok: true, duplicate: true };
+
+  const period = billingPeriodForBusiness(business);
+  addBillingEvent(business, {
+    type: "addon_payment",
+    status: "paid",
+    amountKobo: Number(transaction.amount || addon.priceKobo),
+    currency: String(transaction.currency || "NGN"),
+    reference: transaction.reference,
+    source: "paystack",
+    addon: addon.id,
+    emailCredits: addon.emailLimit,
+    whatsappCredits: addon.whatsappLimit,
+    periodStart: period.start ? period.start.toISOString() : "",
+    periodEnd: period.end ? period.end.toISOString() : ""
+  });
+  logAudit(db, {
+    event: "billing.addon_paid",
+    actorUserId: business.ownerUserId,
+    businessId: business.id,
+    message: `${addon.name} payment verified`,
+    metadata: { reference: transaction.reference, addon: addon.id, emailCredits: addon.emailLimit, whatsappCredits: addon.whatsappLimit }
+  });
+  await writeDb(db);
+  return { ok: true };
 }
 
 async function setSubscriptionByAdmin(body) {
   const email = normalizeEmail(body.email);
   const action = String(body.action || "activate").toLowerCase();
   const days = Number(body.days || BILLING_DURATION_DAYS);
+  const plan = getBillingPlan(body.planId || body.plan);
   if (!email) {
     const error = new Error("Admin subscription update requires an email.");
     error.statusCode = 400;
@@ -1078,13 +1409,15 @@ async function setSubscriptionByAdmin(body) {
       status: "inactive",
       expiresAt: "",
       paystackReference: "manual-admin-deactivate",
+      plan: business.subscription?.plan || plan.id,
       updatedAt: new Date().toISOString()
     };
     addBillingEvent(business, {
       type: "admin_deactivate",
       status: "inactive",
       reference: "manual-admin-deactivate",
-      source: "admin"
+      source: "admin",
+      plan: business.subscription?.plan || plan.id
     });
   } else {
     const periodStart = new Date().toISOString();
@@ -1093,6 +1426,7 @@ async function setSubscriptionByAdmin(body) {
       status: "active",
       expiresAt: periodEnd,
       paystackReference: "manual-admin-activate",
+      plan: plan.id,
       updatedAt: new Date().toISOString()
     };
     addBillingEvent(business, {
@@ -1100,6 +1434,7 @@ async function setSubscriptionByAdmin(body) {
       status: "active",
       reference: "manual-admin-activate",
       source: "admin",
+      plan: plan.id,
       periodStart,
       periodEnd
     });
@@ -1109,10 +1444,10 @@ async function setSubscriptionByAdmin(body) {
     actorEmail: "admin",
     businessId: business.id,
     message: `Subscription ${action}d by admin`,
-    metadata: { email, days: action === "activate" ? Math.max(1, days) : 0 }
+    metadata: { email, plan: plan.id, days: action === "activate" ? Math.max(1, days) : 0 }
   });
   await writeDb(db);
-  return { ok: true, email, billing: subscriptionStatus(business) };
+  return { ok: true, email, billing: subscriptionStatus(business, db) };
 }
 
 async function runAutomatedReminders({ dryRun = false, reason = "manual" } = {}) {
@@ -1121,7 +1456,7 @@ async function runAutomatedReminders({ dryRun = false, reason = "manual" } = {})
   const run = {
     id: newId("rrun"),
     reason,
-    dryRun: Boolean(dryRun || !reminderEmailReady()),
+    dryRun: Boolean(dryRun || !reminderProviderReady()),
     checked: 0,
     queued: 0,
     sent: 0,
@@ -1145,7 +1480,11 @@ async function runAutomatedReminders({ dryRun = false, reason = "manual" } = {})
       run.skipped += 1;
       continue;
     }
-    if (!invoice.email || !["pending", "overdue"].includes(effectiveStatus(invoice))) {
+    const billing = subscriptionStatus(business, db);
+    const channels = allowedReminderChannels(business, billing)
+      .filter(channel => recipientForChannel(invoice, channel))
+      .filter(channel => run.dryRun || reminderChannelReady(channel));
+    if (!channels.length || !["pending", "overdue"].includes(effectiveStatus(invoice))) {
       run.skipped += 1;
       continue;
     }
@@ -1153,76 +1492,170 @@ async function runAutomatedReminders({ dryRun = false, reason = "manual" } = {})
     const before = Number(business.settings?.reminderBeforeDays || 0);
     const after = Number(business.settings?.reminderAfterDays || 0);
     const shouldSend = dueIn >= 0 ? dueIn <= before : Math.abs(dueIn) >= after;
-    if (!shouldSend || reminderAlreadySentToday(invoice, todayKey)) {
+    if (!shouldSend) {
       run.skipped += 1;
       continue;
     }
 
-    run.queued += 1;
+    const queuedChannels = channels.filter(channel =>
+      !reminderAlreadySentToday(invoice, todayKey, channel) &&
+      !reminderLimitReached(billing, channel)
+    );
+    if (!queuedChannels.length) {
+      run.skipped += 1;
+      continue;
+    }
+
+    run.queued += queuedChannels.length;
     const owner = usersById.get(business.ownerUserId);
     const message = reminderMessageForInvoice(invoice, business);
     if (run.dryRun) continue;
 
-    try {
-      await sendReminderEmail({
-        to: invoice.email,
-        replyTo: business.settings?.ownerEmail || owner?.email || "",
-        subject: `Payment reminder for ${invoice.id}`,
-        html: reminderHtml({ invoice, business, message }),
-        text: message
-      });
-      invoice.reminders = Array.isArray(invoice.reminders) ? invoice.reminders : [];
-      invoice.reminders.push({ date: todayKey, channel: "Auto Email", at: new Date().toISOString() });
-      logAudit(db, {
-        event: "reminder.sent",
-        businessId: business.id,
-        invoiceId: invoice.id,
-        message: `Automated reminder sent for ${invoice.id}`
-      });
-      run.sent += 1;
-    } catch (error) {
-      logAudit(db, {
-        event: "reminder.failed",
-        businessId: business.id,
-        invoiceId: invoice.id,
-        message: error.message
-      });
-      run.failed += 1;
+    for (const channel of queuedChannels) {
+      try {
+        await sendReminderDelivery({
+          channel,
+          invoice,
+          business,
+          owner,
+          message
+        });
+        invoice.reminders = Array.isArray(invoice.reminders) ? invoice.reminders : [];
+        invoice.reminders.push({ date: todayKey, channel: autoReminderChannelName(channel), at: new Date().toISOString() });
+        billing.usage[channel] += 1;
+        logAudit(db, {
+          event: "reminder.sent",
+          businessId: business.id,
+          invoiceId: invoice.id,
+          message: `Automated ${channel} reminder sent for ${invoice.id}`,
+          metadata: { channel }
+        });
+        run.sent += 1;
+      } catch (error) {
+        logAudit(db, {
+          event: "reminder.failed",
+          businessId: business.id,
+          invoiceId: invoice.id,
+          message: error.message,
+          metadata: { channel }
+        });
+        run.failed += 1;
+      }
     }
   }
 
   run.finishedAt = new Date().toISOString();
   db.reminderRuns = [...(db.reminderRuns || []), run].slice(-120);
   await writeDb(db);
-  return { ...run, providerConfigured: reminderEmailReady() };
+  return { ...run, providerConfigured: reminderProviderReady() };
 }
 
-function reminderEmailReady() {
-  return Boolean(RESEND_API_KEY && REMINDER_FROM_EMAIL);
+function reminderProviderReady() {
+  return reminderChannelReady("email") || reminderChannelReady("whatsapp");
 }
 
-async function sendReminderEmail({ to, replyTo, subject, html, text }) {
-  if (!reminderEmailReady()) throw new Error("Reminder email provider is not configured.");
-  const response = await fetch("https://api.resend.com/emails", {
+function reminderChannelReady(channel) {
+  if (!TERMII_API_KEY || !TERMII_BASE_URL) return false;
+  if (channel === "email") return Boolean(TERMII_EMAIL_CONFIGURATION_ID && TERMII_EMAIL_TEMPLATE_ID);
+  if (channel === "whatsapp") return Boolean(TERMII_WHATSAPP_DEVICE_ID && TERMII_WHATSAPP_TEMPLATE_ID);
+  return false;
+}
+
+function allowedReminderChannels(business, billing = null) {
+  const limits = billing?.limits || subscriptionStatus(business).limits || {};
+  const channels = sanitizeReminderChannels(business?.settings?.automatedReminderChannels || {});
+  return ["email", "whatsapp"].filter(channel => channels[channel] === true && Number(limits[channel] || 0) > 0);
+}
+
+function recipientForChannel(invoice, channel) {
+  if (channel === "email") return Boolean(invoice.email);
+  if (channel === "whatsapp") return Boolean(normalizePhoneForTermii(invoice.phone));
+  return false;
+}
+
+function reminderLimitReached(billing, channel) {
+  const limit = Number(billing?.limits?.[channel] || 0);
+  if (limit <= 0) return true;
+  return Number(billing?.usage?.[channel] || 0) >= limit;
+}
+
+function autoReminderChannelName(channel) {
+  return channel === "whatsapp" ? "Auto WhatsApp" : "Auto Email";
+}
+
+async function sendReminderDelivery({ channel, invoice, business, owner, message }) {
+  if (!reminderChannelReady(channel)) throw new Error(`Termii ${channel} provider is not configured.`);
+  if (channel === "whatsapp") return sendTermiiWhatsAppReminder({ invoice, business, message });
+  return sendTermiiEmailReminder({ invoice, business, owner, message });
+}
+
+async function sendTermiiEmailReminder({ invoice, business, owner, message }) {
+  const variables = reminderVariables(invoice, business, message);
+  const response = await fetch(`${TERMII_BASE_URL}/api/templates/send-email`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      from: REMINDER_FROM_EMAIL,
-      to: [to],
-      reply_to: replyTo || undefined,
-      subject,
-      html,
-      text
+      api_key: TERMII_API_KEY,
+      email: invoice.email,
+      subject: `Payment reminder for ${invoice.id}`,
+      email_configuration_id: TERMII_EMAIL_CONFIGURATION_ID,
+      template_id: TERMII_EMAIL_TEMPLATE_ID,
+      variables: {
+        ...variables,
+        reply_to: business.settings?.ownerEmail || owner?.email || ""
+      }
     })
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.message || `Reminder email failed with HTTP ${response.status}.`);
+    throw new Error(payload.message || `Termii email reminder failed with HTTP ${response.status}.`);
   }
   return response.json();
+}
+
+async function sendTermiiWhatsAppReminder({ invoice, business, message }) {
+  const variables = reminderVariables(invoice, business, message);
+  const response = await fetch(`${TERMII_BASE_URL}/api/send/template`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      api_key: TERMII_API_KEY,
+      phone_number: normalizePhoneForTermii(invoice.phone),
+      device_id: TERMII_WHATSAPP_DEVICE_ID,
+      template_id: TERMII_WHATSAPP_TEMPLATE_ID,
+      data: {
+        "1": variables.customer_name,
+        "2": variables.business_name,
+        "3": variables.invoice_id,
+        "4": variables.amount,
+        "5": variables.due_date,
+        "6": variables.payment_link
+      }
+    })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.message || `Termii WhatsApp reminder failed with HTTP ${response.status}.`);
+  }
+  return response.json();
+}
+
+function reminderVariables(invoice, business, message) {
+  const total = formatMoneyPlain(invoiceTotal(invoice, business.settings));
+  const due = new Date(invoice.dueDate + "T00:00:00").toLocaleDateString("en-NG", { day: "2-digit", month: "short", year: "numeric" });
+  return {
+    customer_name: invoice.customer,
+    invoice_id: invoice.id,
+    amount: total,
+    due_date: due,
+    payment_link: `${PUBLIC_BASE_URL || ""}/#pay/${encodeURIComponent(invoice.publicId || invoice.id)}`,
+    business_name: business.settings?.businessName || "LedgerLink",
+    message
+  };
 }
 
 function reminderMessageForInvoice(invoice, business) {
@@ -1245,10 +1678,19 @@ function reminderHtml({ invoice, business, message }) {
   `;
 }
 
-function reminderAlreadySentToday(invoice, todayKey) {
+function reminderAlreadySentToday(invoice, todayKey, channel = "email") {
+  const autoChannel = autoReminderChannelName(channel);
   return (Array.isArray(invoice.reminders) ? invoice.reminders : []).some(reminder =>
-    reminder.channel === "Auto Email" && String(reminder.date || reminder.at || "").slice(0, 10) === todayKey
+    reminder.channel === autoChannel && String(reminder.date || reminder.at || "").slice(0, 10) === todayKey
   );
+}
+
+function normalizePhoneForTermii(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("234") && digits.length >= 13) return digits;
+  if (digits.startsWith("0") && digits.length >= 11) return `234${digits.slice(1)}`;
+  return digits;
 }
 
 function daysUntil(dateValue) {
@@ -1286,7 +1728,7 @@ function adminOverview(db) {
   const businesses = db.businesses.map(business => {
     const user = usersById.get(business.ownerUserId);
     const invoices = db.invoices.filter(invoice => invoice.businessId === business.id);
-    const billing = subscriptionStatus(business);
+    const billing = subscriptionStatus(business, db);
     return {
       id: business.id,
       businessName: business.settings?.businessName || "",
@@ -1418,7 +1860,7 @@ async function runReminderScheduleIfDue() {
   const scheduleKey = now.toISOString().slice(0, 10);
   if (lastReminderScheduleKey === scheduleKey) return;
   lastReminderScheduleKey = scheduleKey;
-  const result = await runAutomatedReminders({ dryRun: !reminderEmailReady(), reason: "schedule" });
+  const result = await runAutomatedReminders({ dryRun: !reminderProviderReady(), reason: "schedule" });
   console.log(`Reminder run: checked=${result.checked} queued=${result.queued} sent=${result.sent} failed=${result.failed} dryRun=${result.dryRun}`);
 }
 

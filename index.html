@@ -1069,6 +1069,7 @@
     let verifiedBillingReference = "";
     let verifiedAddonReference = "";
     let saveTimer = null;
+    let invoiceCreateBusy = false;
 
     const icons = {
       dashboard: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>',
@@ -2213,10 +2214,15 @@
 
     async function createInvoice(event) {
       event.preventDefault();
+      if (invoiceCreateBusy) return;
       if (!canCreateInvoice()) return;
+      invoiceCreateBusy = true;
+      setInvoiceFormBusy(true);
       const form = new FormData(event.currentTarget);
       const items = readLineItems();
       if (!items.length) {
+        invoiceCreateBusy = false;
+        setInvoiceFormBusy(false);
         showToast("Add at least one line item.");
         return;
       }
@@ -2245,6 +2251,21 @@
         state.invoices = state.invoices.filter(item => item.publicId !== invoice.publicId);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         showToast(error.message);
+      } finally {
+        invoiceCreateBusy = false;
+        setInvoiceFormBusy(false);
+      }
+    }
+
+    function setInvoiceFormBusy(isBusy) {
+      const form = document.querySelector("#invoiceForm");
+      if (!form) return;
+      form.querySelectorAll("button, input, textarea").forEach(control => {
+        control.disabled = isBusy;
+      });
+      const submit = form.querySelector("button[type='submit']");
+      if (submit) {
+        submit.innerHTML = isBusy ? `${icons.invoice}Creating...` : `${icons.invoice}Create and copy link`;
       }
     }
 

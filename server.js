@@ -5,6 +5,7 @@ const crypto = require("crypto");
 
 const ROOT_DIR = __dirname;
 const LOADED_ENV_FILES = loadEnvFiles([".env.local", ".env"]);
+const APP_VERSION = "invoice-create-fast-v4";
 
 const PORT = Number(process.env.PORT || 8787);
 const PLATFORM_PAYSTACK_SECRET_KEY = (process.env.PLATFORM_PAYSTACK_SECRET_KEY || "").trim();
@@ -184,7 +185,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/health" && req.method === "GET") {
-      writeJson(res, 200, { ok: true, service: "ledgerlink", time: new Date().toISOString() });
+      writeJson(res, 200, { ok: true, service: "ledgerlink", version: APP_VERSION, time: new Date().toISOString() });
       return;
     }
 
@@ -1307,7 +1308,10 @@ function serveStatic(urlPath, res) {
     writeJson(res, 404, { error: "Not found." });
     return;
   }
-  res.writeHead(200, { "Content-Type": mimeTypes[path.extname(filePath)] || "application/octet-stream" });
+  const ext = path.extname(filePath);
+  const headers = { "Content-Type": mimeTypes[ext] || "application/octet-stream" };
+  if (ext === ".html") headers["Cache-Control"] = "no-store, max-age=0";
+  res.writeHead(200, headers);
   fs.createReadStream(filePath).pipe(res);
 }
 

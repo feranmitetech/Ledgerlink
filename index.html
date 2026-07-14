@@ -1056,7 +1056,8 @@
     const root = document.querySelector("#root");
     const toastEl = document.querySelector("#toast");
     const today = new Date();
-    const SAVE_TIMEOUT_MS = 25000;
+    const APP_VERSION = "invoice-create-fast-v4";
+    const SAVE_TIMEOUT_MS = 15000;
     const canUseBackend = location.protocol === "http:" || location.protocol === "https:";
     let activeView = "dashboard";
     let statusFilter = "all";
@@ -1071,6 +1072,8 @@
     let verifiedAddonReference = "";
     let saveTimer = null;
     let invoiceCreateBusy = false;
+    window.ledgerLinkVersion = APP_VERSION;
+    console.log(`LedgerLink ${APP_VERSION}`);
 
     const icons = {
       dashboard: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>',
@@ -2234,9 +2237,16 @@
       if (!canCreateInvoice()) return;
       invoiceCreateBusy = true;
       setInvoiceFormBusy(true);
+      const unlockTimer = setTimeout(() => {
+        if (!invoiceCreateBusy) return;
+        invoiceCreateBusy = false;
+        setInvoiceFormBusy(false);
+        showToast("Invoice save is still waiting on the server. Refresh and try again.");
+      }, SAVE_TIMEOUT_MS + 1000);
       const form = new FormData(event.currentTarget);
       const items = readLineItems();
       if (!items.length) {
+        clearTimeout(unlockTimer);
         invoiceCreateBusy = false;
         setInvoiceFormBusy(false);
         showToast("Add at least one line item.");
@@ -2267,6 +2277,7 @@
       } catch (error) {
         showToast(error.message);
       } finally {
+        clearTimeout(unlockTimer);
         invoiceCreateBusy = false;
         setInvoiceFormBusy(false);
       }

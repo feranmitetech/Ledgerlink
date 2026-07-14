@@ -2242,7 +2242,7 @@
         showToast("Add at least one line item.");
         return;
       }
-      const invoice = {
+      const invoiceDraft = {
         id: nextInvoiceId(),
         publicId: newPublicId(),
         customer: form.get("customer").trim(),
@@ -2255,22 +2255,40 @@
         items,
         reminders: []
       };
-      if (invoice.status === "paid") invoice.paidAt = dateOffset(0);
-      state.invoices.unshift(invoice);
+      if (invoiceDraft.status === "paid") invoiceDraft.paidAt = dateOffset(0);
       try {
-        await saveStateNow();
+        const invoice = await createInvoiceOnBackend(invoiceDraft);
+        state.invoices.unshift(invoice);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         closeInvoiceModal();
         copyInvoiceLink(invoice.id);
         activeView = "invoices";
         render();
       } catch (error) {
-        state.invoices = state.invoices.filter(item => item.publicId !== invoice.publicId);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         showToast(error.message);
       } finally {
         invoiceCreateBusy = false;
         setInvoiceFormBusy(false);
       }
+    }
+
+    async function createInvoiceOnBackend(invoice) {
+      if (!backendReady || (canUseBackend && !currentUser)) {
+        return invoice;
+      }
+      const response = await fetchWithTimeout("/api/invoices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(invoice)
+      }, SAVE_TIMEOUT_MS);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error("The running server is older. Restart with the latest server.js.");
+        }
+        throw new Error(payload.error || "Could not create invoice.");
+      }
+      return payload.invoice || invoice;
     }
 
     function setInvoiceFormBusy(isBusy) {

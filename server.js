@@ -525,6 +525,43 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/invoices" && req.method === "POST") {
+      if (!checkRateLimit(req, res, "invoice:create", 30, 10 * 60 * 1000)) return;
+      const { user, db } = await requireUser(req, res);
+      if (!user) return;
+      const business = getBusinessForUser(db, user);
+      if (!subscriptionStatus(business).active) {
+        writeJson(res, 402, { error: "Renew the LedgerLink plan before creating invoices." });
+        return;
+      }
+      const body = await readJson(req);
+      const businessInvoices = db.invoices.filter(invoice => invoice.businessId === business.id);
+      const invoice = sanitizeInvoice({
+        ...body,
+        id: nextInvoiceId(businessInvoices),
+        publicId: body.publicId || newId("inv"),
+        reminders: [],
+        paidAt: body.status === "paid" ? new Date().toISOString().slice(0, 10) : ""
+      });
+      if (!invoice.customer || !invoice.email || !invoice.items.length) {
+        writeJson(res, 400, { error: "Customer name, email, and at least one line item are required." });
+        return;
+      }
+      invoice.businessId = business.id;
+      db.invoices.unshift(invoice);
+      logAudit(db, {
+        event: "invoice.created",
+        actorUserId: user.id,
+        actorEmail: user.email,
+        businessId: business.id,
+        invoiceId: invoice.id,
+        message: `Invoice ${invoice.id} created`
+      });
+      await writeDb(db);
+      writeJson(res, 201, { invoice: publicInvoicePayload(invoice) });
+      return;
+    }
+
     const invoicePatch = url.pathname.match(/^\/api\/invoices\/([^/]+)$/);
     if (invoicePatch && req.method === "PATCH") {
       const { user, db } = await requireUser(req, res);
@@ -1611,7 +1648,7 @@ async function sendTermiiEmailReminder({ invoice, business, owner, message }) {
     } catch {
       payload = {};
     }
-    const details = payload.message || payload.error || text || response.statusText;
+    const details = payload.details || payload.error || payload.message || text || response.statusText;
     throw new Error(`Termii email reminder failed with HTTP ${response.status} at ${TERMII_BASE_URL}/api/templates/send-email: ${details}`);
   }
   return response.json();

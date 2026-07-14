@@ -830,8 +830,8 @@ async function getMongoCollection() {
     const { MongoClient } = require("mongodb");
     mongoClient = new MongoClient(MONGODB_URI, {
       tls: true,
-      serverSelectionTimeoutMS: 10000,
-      connectTimeoutMS: 10000
+      serverSelectionTimeoutMS: 30000,
+      connectTimeoutMS: 30000
     });
     await mongoClient.connect();
   }

@@ -1056,6 +1056,7 @@
     const root = document.querySelector("#root");
     const toastEl = document.querySelector("#toast");
     const today = new Date();
+    const SAVE_TIMEOUT_MS = 25000;
     const canUseBackend = location.protocol === "http:" || location.protocol === "https:";
     let activeView = "dashboard";
     let statusFilter = "all";
@@ -1207,11 +1208,11 @@
     async function saveStateNow() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       if (!backendReady || (canUseBackend && !currentUser)) return state;
-      const response = await fetch("/api/state", {
+      const response = await fetchWithTimeout("/api/state", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(state)
-      });
+      }, SAVE_TIMEOUT_MS);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 404) {
@@ -1222,6 +1223,21 @@
       state = normalizeState(payload);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       return state;
+    }
+
+    async function fetchWithTimeout(url, options = {}, timeoutMs = SAVE_TIMEOUT_MS) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } catch (error) {
+        if (error.name === "AbortError") {
+          throw new Error("Saving took too long. Please check your connection, refresh, and try again.");
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
     async function hydrateFromBackend() {

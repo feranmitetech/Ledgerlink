@@ -527,37 +527,8 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/invoices" && req.method === "POST") {
       if (!checkRateLimit(req, res, "invoice:create", 30, 10 * 60 * 1000)) return;
-      const { user, db } = await requireUser(req, res);
-      if (!user) return;
-      const business = getBusinessForUser(db, user);
-      if (!subscriptionStatus(business).active) {
-        writeJson(res, 402, { error: "Renew the LedgerLink plan before creating invoices." });
-        return;
-      }
       const body = await readJson(req);
-      const businessInvoices = db.invoices.filter(invoice => invoice.businessId === business.id);
-      const invoice = sanitizeInvoice({
-        ...body,
-        id: nextInvoiceId(businessInvoices),
-        publicId: body.publicId || newId("inv"),
-        reminders: [],
-        paidAt: body.status === "paid" ? new Date().toISOString().slice(0, 10) : ""
-      });
-      if (!invoice.customer || !invoice.email || !invoice.items.length) {
-        writeJson(res, 400, { error: "Customer name, email, and at least one line item are required." });
-        return;
-      }
-      invoice.businessId = business.id;
-      db.invoices.unshift(invoice);
-      logAudit(db, {
-        event: "invoice.created",
-        actorUserId: user.id,
-        actorEmail: user.email,
-        businessId: business.id,
-        invoiceId: invoice.id,
-        message: `Invoice ${invoice.id} created`
-      });
-      await writeDb(db);
+      const invoice = await createInvoiceForRequest(req, body);
       writeJson(res, 201, { invoice: publicInvoicePayload(invoice) });
       return;
     }
@@ -1231,6 +1202,98 @@ function sanitizeInvoice(invoice) {
 function publicInvoicePayload(invoice) {
   const { businessId, reminders, ...safeInvoice } = invoice;
   return safeInvoice;
+}
+
+async function createInvoiceForRequest(req, body) {
+  if (MONGODB_URI && !DATABASE_URL) {
+    return createInvoiceInMongo(req, body);
+  }
+  const db = await readDb();
+  const user = authenticatedUserFromDb(req, db);
+  const business = getBusinessForUser(db, user);
+  ensureCanCreateInvoice(business);
+  const businessInvoices = db.invoices.filter(invoice => invoice.businessId === business.id);
+  const invoice = invoiceFromRequestBody(body, business, nextInvoiceId(businessInvoices));
+  db.invoices.unshift(invoice);
+  logAudit(db, invoiceCreatedAudit(user, business, invoice));
+  await writeDb(db);
+  return invoice;
+}
+
+async function createInvoiceInMongo(req, body) {
+  const collection = await getMongoCollection();
+  const document = await collection.findOne(
+    { _id: "app" },
+    { projection: { "data.users": 1, "data.businesses": 1, "data.sessions": 1 } }
+  );
+  const db = sanitizeDb({ ...emptyDb(), ...(document?.data || {}), invoices: [] });
+  const user = authenticatedUserFromDb(req, db);
+  const business = getBusinessForUser(db, user);
+  ensureCanCreateInvoice(business);
+
+  const invoiceIds = await collection.aggregate([
+    { $match: { _id: "app" } },
+    { $unwind: "$data.invoices" },
+    { $match: { "data.invoices.businessId": business.id } },
+    { $project: { _id: 0, id: "$data.invoices.id" } }
+  ]).toArray();
+  const invoice = invoiceFromRequestBody(body, business, nextInvoiceId(invoiceIds));
+  const auditLog = sanitizeAuditLog(invoiceCreatedAudit(user, business, invoice));
+  const update = {
+    $push: {
+      "data.invoices": { $each: [invoice], $position: 0 },
+      "data.auditLogs": { $each: [auditLog], $slice: -800 }
+    },
+    $set: { updatedAt: new Date() }
+  };
+  await collection.updateOne({ _id: "app" }, update);
+  return invoice;
+}
+
+function authenticatedUserFromDb(req, db) {
+  const sessionId = getCookie(req, SESSION_COOKIE);
+  const session = db.sessions.find(item => item.id === sessionId && new Date(item.expiresAt) > new Date());
+  const user = session ? db.users.find(item => item.id === session.userId) : null;
+  if (!user) throw httpError("Sign in required.", 401);
+  return user;
+}
+
+function ensureCanCreateInvoice(business) {
+  if (!subscriptionStatus(business).active) {
+    throw httpError("Renew the LedgerLink plan before creating invoices.", 402);
+  }
+}
+
+function invoiceFromRequestBody(body, business, invoiceId) {
+  const invoice = sanitizeInvoice({
+    ...body,
+    id: invoiceId,
+    publicId: body.publicId || newId("inv"),
+    reminders: [],
+    paidAt: body.status === "paid" ? new Date().toISOString().slice(0, 10) : ""
+  });
+  if (!invoice.customer || !invoice.email || !invoice.items.length) {
+    throw httpError("Customer name, email, and at least one line item are required.", 400);
+  }
+  invoice.businessId = business.id;
+  return invoice;
+}
+
+function invoiceCreatedAudit(user, business, invoice) {
+  return {
+    event: "invoice.created",
+    actorUserId: user.id,
+    actorEmail: user.email,
+    businessId: business.id,
+    invoiceId: invoice.id,
+    message: `Invoice ${invoice.id} created`
+  };
+}
+
+function httpError(message, statusCode) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 function serveStatic(urlPath, res) {

@@ -2235,6 +2235,13 @@
       event.preventDefault();
       if (invoiceCreateBusy) return;
       if (!canCreateInvoice()) return;
+      const form = new FormData(event.currentTarget);
+      const formText = name => String(form.get(name) || "").trim();
+      const items = readLineItems();
+      if (!items.length) {
+        showToast("Add at least one line item.");
+        return;
+      }
       invoiceCreateBusy = true;
       setInvoiceFormBusy(true);
       const unlockTimer = setTimeout(() => {
@@ -2243,25 +2250,16 @@
         setInvoiceFormBusy(false);
         showToast("Invoice save is still waiting on the server. Refresh and try again.");
       }, SAVE_TIMEOUT_MS + 1000);
-      const form = new FormData(event.currentTarget);
-      const items = readLineItems();
-      if (!items.length) {
-        clearTimeout(unlockTimer);
-        invoiceCreateBusy = false;
-        setInvoiceFormBusy(false);
-        showToast("Add at least one line item.");
-        return;
-      }
       const invoiceDraft = {
         id: nextInvoiceId(),
         publicId: newPublicId(),
-        customer: form.get("customer").trim(),
-        email: form.get("email").trim(),
-        phone: form.get("phone").trim(),
-        issueDate: form.get("issueDate"),
-        dueDate: form.get("dueDate"),
-        status: form.get("status"),
-        notes: form.get("notes").trim(),
+        customer: formText("customer"),
+        email: formText("email"),
+        phone: formText("phone"),
+        issueDate: formText("issueDate"),
+        dueDate: formText("dueDate"),
+        status: formText("status") || "pending",
+        notes: formText("notes"),
         items,
         reminders: []
       };

@@ -661,6 +661,10 @@ const server = http.createServer(async (req, res) => {
         dryRun: body.dryRun !== false,
         reason: "admin"
       });
+      if (url.searchParams.get("compact") === "1" || body.compact === true) {
+        writeJson(res, 200, compactReminderRun(result));
+        return;
+      }
       writeJson(res, 200, result);
       return;
     }
@@ -1084,6 +1088,21 @@ function sanitizeReminderRun(run) {
     })),
     startedAt: run.startedAt,
     finishedAt: run.finishedAt || ""
+  };
+}
+
+function compactReminderRun(run) {
+  return {
+    ok: true,
+    id: run.id,
+    dryRun: Boolean(run.dryRun),
+    checked: Number(run.checked || 0),
+    queued: Number(run.queued || 0),
+    sent: Number(run.sent || 0),
+    failed: Number(run.failed || 0),
+    skipped: Number(run.skipped || 0),
+    providerConfigured: Boolean(run.providerConfigured),
+    finishedAt: run.finishedAt || new Date().toISOString()
   };
 }
 

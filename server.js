@@ -657,8 +657,26 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/admin/reminders/run" && req.method === "POST") {
       requireAdmin(req);
       const body = await readJson(req);
+      const dryRun = body.dryRun !== false;
+      if (url.searchParams.get("async") === "1" || body.async === true) {
+        const startedAt = new Date().toISOString();
+        runAutomatedReminders({ dryRun, reason: "cron" })
+          .then(result => {
+            console.log(`Async reminder run complete: id=${result.id} checked=${result.checked} queued=${result.queued} sent=${result.sent} failed=${result.failed}`);
+          })
+          .catch(error => {
+            console.error("Async reminder run failed:", error.message);
+          });
+        writeJson(res, 202, {
+          ok: true,
+          accepted: true,
+          dryRun,
+          startedAt
+        });
+        return;
+      }
       const result = await runAutomatedReminders({
-        dryRun: body.dryRun !== false,
+        dryRun,
         reason: "admin"
       });
       if (url.searchParams.get("compact") === "1" || body.compact === true) {

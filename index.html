@@ -2015,11 +2015,22 @@
       const reference = paymentReferenceFromUrl();
       if (!reference || reference === verifiedReference || !canUseBackend) return;
       verifiedReference = reference;
+      await verifyInvoicePayment(reference, invoiceId);
+    }
+
+    async function verifyInvoicePayment(reference, invoiceId) {
       try {
         const response = await fetch(`/paystack/verify?reference=${encodeURIComponent(reference)}`);
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Payment verification failed.");
         publicInvoiceCache[invoiceId] = null;
+        const localInvoice = state.invoices.find(item => item.id === invoiceId || item.publicId === invoiceId);
+        if (localInvoice) {
+          localInvoice.status = "paid";
+          localInvoice.paidAt = dateOffset(0);
+          localInvoice.paystackReference = reference;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        }
         showToast("Payment verified.");
         fetchPublicInvoice(invoiceId);
       } catch (error) {
@@ -2397,10 +2408,24 @@
         if (response.status === 404) throw new Error("The running server is older. Restart with the latest server.js.");
         if (!response.ok) throw new Error(payload.error || "Could not start renewal payment.");
         const accessCode = payload.access_code || payload.accessCode || payload.data?.access_code;
+        const reference = payload.reference || payload.data?.reference || "";
         if (!accessCode) throw new Error("No Paystack access code returned.");
         if (!window.PaystackPop) throw new Error("Paystack Popup script is not available.");
         const popup = new PaystackPop();
-        popup.resumeTransaction(accessCode);
+        popup.resumeTransaction(accessCode, {
+          onSuccess: transaction => {
+            const paidReference = transaction?.reference || transaction?.trxref || reference;
+            if (!paidReference) {
+              showToast("Payment completed. Refreshing invoice status...");
+              fetchPublicInvoice(invoice.publicId || id);
+              return;
+            }
+            showToast("Payment completed. Verifying...");
+            verifyInvoicePayment(paidReference, invoice.publicId || id);
+          },
+          onCancel: () => showToast("Payment window closed."),
+          onError: error => showToast(error?.message || "Paystack payment failed.")
+        });
       } catch (error) {
         showToast(error.message);
       }

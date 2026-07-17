@@ -5,7 +5,7 @@ const crypto = require("crypto");
 
 const ROOT_DIR = __dirname;
 const LOADED_ENV_FILES = loadEnvFiles([".env.local", ".env"]);
-const APP_VERSION = "invoice-create-fast-v4";
+const APP_VERSION = "payment-auto-verify-v5";
 
 const PORT = Number(process.env.PORT || 8787);
 const PLATFORM_PAYSTACK_SECRET_KEY = (process.env.PLATFORM_PAYSTACK_SECRET_KEY || "").trim();
@@ -604,7 +604,25 @@ const server = http.createServer(async (req, res) => {
         body: JSON.stringify(payload)
       });
 
-      writeJson(res, paystackResponse.status, await paystackResponse.json());
+      const paystackPayload = await paystackResponse.json();
+      if (paystackResponse.ok && paystackPayload.status) {
+        invoice.paystackReference = reference;
+        invoice.paystackInitializedAt = new Date().toISOString();
+        await writeDb(db);
+      }
+      writeJson(res, paystackResponse.status, paystackPayload);
+      return;
+    }
+
+    if (url.pathname === "/paystack/invoice-status" && req.method === "GET") {
+      if (!checkRateLimit(req, res, "paystack:invoice-status", 120, 10 * 60 * 1000)) return;
+      const publicId = url.searchParams.get("publicId");
+      if (!publicId) {
+        writeJson(res, 400, { error: "Missing invoice public ID." });
+        return;
+      }
+      const status = await verifyStoredInvoicePayment(publicId);
+      writeJson(res, 200, status);
       return;
     }
 
@@ -660,12 +678,16 @@ const server = http.createServer(async (req, res) => {
       const dryRun = body.dryRun !== false;
       if (url.searchParams.get("async") === "1" || body.async === true) {
         const startedAt = new Date().toISOString();
-        runAutomatedReminders({ dryRun, reason: "cron" })
+        runPaymentReconciliation({ reason: "cron" })
+          .then(paymentResult => {
+            console.log(`Async payment reconciliation complete: checked=${paymentResult.checked} paid=${paymentResult.paid} failed=${paymentResult.failed} skipped=${paymentResult.skipped}`);
+            return runAutomatedReminders({ dryRun, reason: "cron" });
+          })
           .then(result => {
             console.log(`Async reminder run complete: id=${result.id} checked=${result.checked} queued=${result.queued} sent=${result.sent} failed=${result.failed}`);
           })
           .catch(error => {
-            console.error("Async reminder run failed:", error.message);
+            console.error("Async cron run failed:", error.message);
           });
         writeJson(res, 202, {
           ok: true,
@@ -683,6 +705,13 @@ const server = http.createServer(async (req, res) => {
         writeJson(res, 200, compactReminderRun(result));
         return;
       }
+      writeJson(res, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/api/admin/payments/reconcile" && req.method === "POST") {
+      requireAdmin(req);
+      const result = await runPaymentReconciliation({ reason: "admin" });
       writeJson(res, 200, result);
       return;
     }
@@ -1375,12 +1404,20 @@ function findInvoiceByReference(db, reference) {
 }
 
 async function markInvoicePaidFromTransaction(transaction) {
+  const db = await readDb();
+  const result = applyInvoicePaidFromTransaction(db, transaction);
+  if (!result.ok) return result;
+  await writeDb(db);
+  return { ok: true };
+}
+
+function applyInvoicePaidFromTransaction(db, transaction) {
   const invoiceId = transaction?.metadata?.invoiceId;
   const publicId = transaction?.metadata?.publicId;
-  const db = await readDb();
   const invoice = db.invoices.find(item => (publicId && item.publicId === publicId) || (item.id === invoiceId && item.businessId === transaction?.metadata?.businessId));
   if (!invoice) return { ok: false, error: "Invoice not found for transaction." };
   const business = db.businesses.find(item => item.id === invoice.businessId);
+  if (!business) return { ok: false, error: "Business not found for invoice transaction." };
   const expectedAmount = Math.round(invoiceTotal(invoice, business.settings) * 100);
   if (transaction.status !== "success") return { ok: false, error: "Transaction was not successful." };
   if (transaction.currency !== "NGN") return { ok: false, error: "Unexpected transaction currency." };
@@ -1398,8 +1435,134 @@ async function markInvoicePaidFromTransaction(transaction) {
     message: `Invoice ${invoice.id} marked paid from Paystack`,
     metadata: { reference: transaction.reference }
   });
-  await writeDb(db);
   return { ok: true };
+}
+
+async function verifyStoredInvoicePayment(publicId) {
+  const db = await readDb();
+  const invoice = db.invoices.find(item => item.publicId === publicId);
+  if (!invoice) {
+    const error = new Error("Invoice not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const business = db.businesses.find(item => item.id === invoice.businessId);
+  if (!business) {
+    const error = new Error("Business not found for invoice.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (effectiveStatus(invoice) === "paid") {
+    return {
+      paid: true,
+      invoice: publicInvoicePayload(invoice),
+      paystack: { configured: publicPaystackStatus(business).configured }
+    };
+  }
+  if (!invoice.paystackReference) {
+    return {
+      paid: false,
+      invoice: publicInvoicePayload(invoice),
+      paystack: { configured: publicPaystackStatus(business).configured }
+    };
+  }
+  const merchantSecret = businessPaystackSecret(business);
+  if (!merchantSecret) {
+    const error = new Error("This business has not added its Paystack secret key yet.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const data = await verifyPaystack(invoice.paystackReference, merchantSecret);
+  if (data.status && data.data?.status === "success") {
+    const result = await markInvoicePaidFromTransaction(data.data);
+    if (!result.ok) {
+      const error = new Error(result.error || "Payment verification failed.");
+      error.statusCode = 422;
+      throw error;
+    }
+  }
+  const freshDb = await readDb();
+  const freshInvoice = freshDb.invoices.find(item => item.publicId === publicId) || invoice;
+  const freshBusiness = freshDb.businesses.find(item => item.id === freshInvoice.businessId) || business;
+  return {
+    paid: effectiveStatus(freshInvoice) === "paid",
+    invoice: publicInvoicePayload(freshInvoice),
+    paystack: { configured: publicPaystackStatus(freshBusiness).configured }
+  };
+}
+
+async function runPaymentReconciliation({ reason = "manual" } = {}) {
+  const db = await readDb();
+  const businessesById = new Map(db.businesses.map(business => [business.id, business]));
+  const result = {
+    reason,
+    checked: 0,
+    paid: 0,
+    failed: 0,
+    skipped: 0,
+    startedAt: new Date().toISOString(),
+    finishedAt: ""
+  };
+
+  for (const invoice of db.invoices) {
+    if (!invoice.paystackReference || !["pending", "overdue"].includes(effectiveStatus(invoice))) {
+      result.skipped += 1;
+      continue;
+    }
+    const business = businessesById.get(invoice.businessId);
+    if (!business) {
+      result.skipped += 1;
+      continue;
+    }
+    const merchantSecret = businessPaystackSecret(business);
+    if (!merchantSecret) {
+      result.skipped += 1;
+      continue;
+    }
+
+    result.checked += 1;
+    try {
+      const data = await verifyPaystack(invoice.paystackReference, merchantSecret);
+      if (data.status && data.data?.status === "success") {
+        const paid = applyInvoicePaidFromTransaction(db, data.data);
+        if (paid.ok) {
+          result.paid += 1;
+        } else {
+          result.failed += 1;
+          logAudit(db, {
+            event: "payment.reconciliation_failed",
+            businessId: invoice.businessId,
+            invoiceId: invoice.id,
+            message: paid.error,
+            metadata: { reference: invoice.paystackReference }
+          });
+        }
+      } else {
+        result.skipped += 1;
+      }
+    } catch (error) {
+      result.failed += 1;
+      logAudit(db, {
+        event: "payment.reconciliation_failed",
+        businessId: invoice.businessId,
+        invoiceId: invoice.id,
+        message: error.message,
+        metadata: { reference: invoice.paystackReference }
+      });
+    }
+  }
+
+  result.finishedAt = new Date().toISOString();
+  if (result.checked || result.paid || result.failed) {
+    logAudit(db, {
+      event: "payment.reconciliation_run",
+      actorEmail: "system",
+      message: `Payment reconciliation checked ${result.checked}, marked ${result.paid} paid, failed ${result.failed}`,
+      metadata: result
+    });
+  }
+  await writeDb(db);
+  return result;
 }
 
 async function markSubscriptionPaidFromTransaction(transaction, expectedUserId = "") {

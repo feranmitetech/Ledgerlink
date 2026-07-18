@@ -676,7 +676,9 @@ const server = http.createServer(async (req, res) => {
       requireAdmin(req);
       const body = await readJson(req);
       const dryRun = body.dryRun !== false;
-      if (url.searchParams.get("async") === "1" || body.async === true) {
+      const waitForResult = url.searchParams.get("wait") === "1" || body.wait === true;
+      const shouldRunAsync = url.searchParams.get("async") === "1" || body.async === true || (!dryRun && !waitForResult);
+      if (shouldRunAsync) {
         const startedAt = new Date().toISOString();
         runPaymentReconciliation({ reason: "cron" })
           .then(paymentResult => {

@@ -675,7 +675,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/admin/reminders/run" && req.method === "POST") {
       requireAdmin(req);
       const body = await readJson(req);
-      const dryRun = body.dryRun !== false;
+      const dryRun = body.dryRun === true || body.dryRun === "true";
       const waitForResult = url.searchParams.get("wait") === "1" || body.wait === true;
       const shouldRunAsync = url.searchParams.get("async") === "1" || body.async === true || (!dryRun && !waitForResult);
       if (shouldRunAsync) {

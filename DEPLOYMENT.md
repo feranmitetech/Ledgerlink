@@ -60,6 +60,7 @@ Set these on your hosting provider:
 NODE_ENV=production
 APP_SECRET=long_random_secret_at_least_32_chars
 ADMIN_API_TOKEN=different_long_random_admin_token
+CRON_SECRET=different_long_random_cron_secret
 PLATFORM_PAYSTACK_SECRET_KEY=sk_live_or_test_platform_billing_key
 LEDGERLINK_BILLING_DAYS=30
 LEDGERLINK_EMAIL_PLAN_PRICE_KOBO=1200000
@@ -86,6 +87,9 @@ DATABASE_URL=postgresql://user:password@host/database?sslmode=require
 DB_PATH=./data/ledgerlink-db.json
 ```
 
+Do not set `PAYSTACK_SECRET_KEY` for normal SaaS operation. Each business adds its own Paystack key inside LedgerLink Settings, and `PLATFORM_PAYSTACK_SECRET_KEY` is only for LedgerLink subscription billing.
+
+If Termii email env vars are missing, automated reminders stay in dry-run mode. You can still preview reminder runs from `/admin.html`.
 
 ## Paystack dashboard setup
 
@@ -99,3 +103,6 @@ The app verifies webhook signatures, amount, currency, invoice ID, and business 
 
 If the same Paystack account already powers another project, do not overwrite that project's webhook blindly. Use `paystack-router.js` as the single Paystack webhook URL, then route events to LedgerLink and the old project separately. See `WEBHOOK_ROUTER.md`.
 
+## Current limitation
+
+The current hosted database adapter stores app state as one document. That is durable enough for staging and early production testing. The next engineering step is normalizing users, businesses, invoices, and sessions into proper database tables/collections.

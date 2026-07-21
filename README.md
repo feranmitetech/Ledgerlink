@@ -72,6 +72,7 @@ Set these on Render:
 ```text
 APP_SECRET=use_a_long_random_secret_at_least_32_characters
 ADMIN_API_TOKEN=use_a_different_long_random_admin_token
+CRON_SECRET=use_a_different_long_random_cron_secret
 PLATFORM_PAYSTACK_SECRET_KEY=sk_live_your_ledgerlink_billing_key
 LEDGERLINK_EMAIL_PLAN_PRICE_KOBO=1200000
 LEDGERLINK_EMAIL_PLAN_EMAIL_LIMIT=300
@@ -88,6 +89,15 @@ PUBLIC_BASE_URL=https://your-ledgerlink-domain.onrender.com
 `APP_SECRET` encrypts business Paystack keys before storage. Do not change it after users have saved keys, or the old saved keys cannot be decrypted.
 
 `ADMIN_API_TOKEN` is for owner-only subscription support actions. Keep it secret and do not put it in the browser.
+
+`CRON_SECRET` is only for external scheduled jobs. Configure cron-job.org to call:
+
+```text
+POST https://your-ledgerlink-domain.onrender.com/api/cron/reminders
+x-cron-secret: your_cron_secret
+```
+
+The cron endpoint always returns a tiny `202 Accepted` response and runs payment reconciliation plus automated reminders in the background.
 
 For local testing in PowerShell:
 

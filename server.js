@@ -12,6 +12,7 @@ const PLATFORM_PAYSTACK_SECRET_KEY = (process.env.PLATFORM_PAYSTACK_SECRET_KEY |
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
 const APP_SECRET = (process.env.APP_SECRET || "").trim();
 const ADMIN_API_TOKEN = (process.env.ADMIN_API_TOKEN || "").trim();
+const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
 const TERMII_API_KEY = (process.env.TERMII_API_KEY || "").trim();
 const TERMII_BASE_URL = (process.env.TERMII_BASE_URL || "").replace(/\/$/, "");
 const TERMII_EMAIL_CONFIGURATION_ID = (process.env.TERMII_EMAIL_CONFIGURATION_ID || "").trim();
@@ -672,33 +673,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/cron/reminders" && req.method === "POST") {
+      requireCron(req);
+      const startedAt = new Date().toISOString();
+      startCronAutomation();
+      writeJson(res, 202, {
+        ok: true,
+        accepted: true,
+        startedAt
+      });
+      return;
+    }
+
     if (url.pathname === "/api/admin/reminders/run" && req.method === "POST") {
       requireAdmin(req);
       const body = await readJson(req);
-      const dryRun = body.dryRun === true || body.dryRun === "true";
-      const waitForResult = url.searchParams.get("wait") === "1" || body.wait === true;
-      const shouldRunAsync = url.searchParams.get("async") === "1" || body.async === true || (!dryRun && !waitForResult);
-      if (shouldRunAsync) {
-        const startedAt = new Date().toISOString();
-        runPaymentReconciliation({ reason: "cron" })
-          .then(paymentResult => {
-            console.log(`Async payment reconciliation complete: checked=${paymentResult.checked} paid=${paymentResult.paid} failed=${paymentResult.failed} skipped=${paymentResult.skipped}`);
-            return runAutomatedReminders({ dryRun, reason: "cron" });
-          })
-          .then(result => {
-            console.log(`Async reminder run complete: id=${result.id} checked=${result.checked} queued=${result.queued} sent=${result.sent} failed=${result.failed}`);
-          })
-          .catch(error => {
-            console.error("Async cron run failed:", error.message);
-          });
-        writeJson(res, 202, {
-          ok: true,
-          accepted: true,
-          dryRun,
-          startedAt
-        });
-        return;
-      }
+      const dryRun = body.dryRun !== false;
       const result = await runAutomatedReminders({
         dryRun,
         reason: "admin"
@@ -2034,6 +2024,20 @@ function adminOverview(db) {
   };
 }
 
+function startCronAutomation() {
+  runPaymentReconciliation({ reason: "cron" })
+    .then(paymentResult => {
+      console.log(`Cron payment reconciliation complete: checked=${paymentResult.checked} paid=${paymentResult.paid} failed=${paymentResult.failed} skipped=${paymentResult.skipped}`);
+      return runAutomatedReminders({ dryRun: false, reason: "cron" });
+    })
+    .then(result => {
+      console.log(`Cron reminder run complete: id=${result.id} checked=${result.checked} queued=${result.queued} sent=${result.sent} failed=${result.failed}`);
+    })
+    .catch(error => {
+      console.error("Cron automation failed:", error.message);
+    });
+}
+
 function businessPaystackSecret(business) {
   const encrypted = business?.paystack?.secretKeyEncrypted;
   return encrypted ? decryptSecret(encrypted) : "";
@@ -2187,7 +2191,7 @@ function escapeHtmlServer(value) {
 function setSecurityHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "null");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,x-paystack-signature,x-admin-token");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,x-paystack-signature,x-admin-token,x-cron-secret");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -2275,6 +2279,22 @@ function requireAdmin(req) {
   const received = Buffer.from(token);
   if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
     const error = new Error("Admin access denied.");
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+function requireCron(req) {
+  if (!CRON_SECRET || CRON_SECRET.length < 24) {
+    const error = new Error("CRON_SECRET is not configured.");
+    error.statusCode = 500;
+    throw error;
+  }
+  const token = String(req.headers["x-cron-secret"] || "");
+  const expected = Buffer.from(CRON_SECRET);
+  const received = Buffer.from(token);
+  if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
+    const error = new Error("Cron access denied.");
     error.statusCode = 403;
     throw error;
   }
